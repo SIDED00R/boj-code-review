@@ -77,16 +77,18 @@ def review_code(req: ReviewRequest):
     if not req.code.strip():
         raise HTTPException(status_code=400, detail="코드가 비어있습니다.")
 
-    # DB 캐시 우선 조회 (reviews → solved_history 순)
-    problem_info = None
-    cached = db.get_cached_problem_info(req.problem_id)
-    if cached:
-        problem_info = cached
-    else:
+    # DB 캐시 우선 조회 → solved.ac → 실패 시 기본값 사용
+    problem_info = db.get_cached_problem_info(req.problem_id)
+    if not problem_info:
         try:
             problem_info = api_client.get_problem_info(req.problem_id)
-        except Exception as e:
-            raise HTTPException(status_code=404, detail=f"문제 정보를 가져올 수 없습니다: {e}")
+        except Exception:
+            problem_info = {
+                "title": f"문제 {req.problem_id}",
+                "tier": 0,
+                "tier_name": "Unrated",
+                "tags": [],
+            }
 
     statement = api_client.get_problem_statement(req.problem_id)
 
