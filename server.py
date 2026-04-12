@@ -84,6 +84,7 @@ def review_code(req: ReviewRequest):
             problem_info = api_client.get_problem_info(req.problem_id)
         except Exception:
             problem_info = {
+                "id": req.problem_id,
                 "title": f"문제 {req.problem_id}",
                 "tier": 0,
                 "tier_name": "Unrated",
