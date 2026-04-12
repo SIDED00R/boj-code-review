@@ -450,6 +450,41 @@ def clear_solved_history():
     conn.close()
 
 
+def get_cached_problem_info(problem_id: int) -> dict | None:
+    """
+    reviews 또는 solved_history에서 문제 정보 반환 (solved.ac 호출 대체용)
+    반환: {title, tier, tier_name, tags} 또는 None
+    """
+    from api_client import TIER_NAMES
+    p = _ph()
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # reviews 테이블 먼저
+    cur.execute(f"SELECT title, tier, tags FROM reviews WHERE problem_id = {p} ORDER BY created_at DESC LIMIT 1", (problem_id,))
+    row = cur.fetchone()
+    if not row:
+        # solved_history 확인
+        cur.execute(f"SELECT title, tier, tags FROM solved_history WHERE problem_id = {p}", (problem_id,))
+        row = cur.fetchone()
+
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+
+    if not row:
+        return None
+
+    title, tier, tags_json = row[0], row[1], row[2]
+    tags = json.loads(tags_json) if tags_json else []
+    return {
+        "title": title,
+        "tier": tier,
+        "tier_name": TIER_NAMES.get(tier, "Unrated"),
+        "tags": tags,
+    }
+
+
 def get_solved_problem(problem_id: int) -> dict | None:
     """가져온 기록에서 특정 문제 조회"""
     p = _ph()
