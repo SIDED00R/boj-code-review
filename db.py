@@ -478,6 +478,7 @@ def get_cached_problem_info(problem_id: int) -> dict | None:
     title, tier, tags_json = row[0], row[1], row[2]
     tags = json.loads(tags_json) if tags_json else []
     return {
+        "id": problem_id,
         "title": title,
         "tier": tier,
         "tier_name": TIER_NAMES.get(tier, "Unrated"),
