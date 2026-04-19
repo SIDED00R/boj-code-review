@@ -178,6 +178,46 @@ function effLabel(e) {
   return { good: '● 효율적', ok: '◐ 보통', poor: '● 비효율적' }[e] || e;
 }
 
+function problemLabel(problem) {
+  if (problem.platform === 'codeforces') return problem.problem_ref;
+  return String(problem.problem_id ?? problem.problem_ref ?? '');
+}
+
+function problemUrl(problem) {
+  if (problem.problem_url) return problem.problem_url;
+  if (problem.platform === 'codeforces') {
+    const ref = String(problem.problem_ref || '').replace(/[^0-9A-Za-z]/g, '');
+    const match = ref.match(/^(\d+)([A-Za-z][A-Za-z0-9]*)$/);
+    if (match) return `https://codeforces.com/problemset/problem/${match[1]}/${match[2].toUpperCase()}`;
+  }
+  return `https://boj.kr/${problem.problem_id ?? problem.problem_ref}`;
+}
+
+function encodedProblemPath(problem) {
+  return `/api/reviews/problem/${encodeURIComponent(problem.platform || 'boj')}/${encodeURIComponent(problem.problem_ref || String(problem.problem_id || ''))}`;
+}
+
+const platformSelect = document.getElementById('problem-platform');
+const problemIdInput = document.getElementById('problem-id');
+const problemIdLabel = document.getElementById('problem-id-label');
+const problemIdHelp = document.getElementById('problem-id-help');
+
+function syncProblemInputUI() {
+  const platform = platformSelect?.value || 'boj';
+  if (platform === 'codeforces') {
+    problemIdLabel.textContent = '문제 번호';
+    problemIdInput.placeholder = '예) 4A 또는 4/A';
+    problemIdHelp.textContent = 'Codeforces: contestId + index 형식으로 입력하세요. 예) 4A, 4/A';
+  } else {
+    problemIdLabel.textContent = '문제 번호';
+    problemIdInput.placeholder = '예) 1000';
+    problemIdHelp.textContent = '백준: 숫자만 입력하세요. 예) 1000';
+  }
+}
+
+platformSelect?.addEventListener('change', syncProblemInputUI);
+syncProblemInputUI();
+
 function setLoading(btn, loading) {
   btn.disabled = loading;
   btn.innerHTML = loading
@@ -195,7 +235,9 @@ const reviewBtn = document.getElementById('review-btn');
 reviewBtn.dataset.label = '분석 시작';
 
 reviewBtn.addEventListener('click', async () => {
+  const platform = platformSelect?.value || 'boj';
   const problemId = document.getElementById('problem-id').value.trim();
+  const problemStatement = document.getElementById('problem-statement').value.trim();
   const code = document.getElementById('code-input').value.trim();
   const result = document.getElementById('review-result');
 
@@ -207,10 +249,14 @@ reviewBtn.addEventListener('click', async () => {
   result.classList.remove('hidden');
 
   try {
+    const payload = { platform, code, problem_statement: problemStatement || null };
+    if (platform === 'codeforces') payload.problem_ref = problemId;
+    else payload.problem_id = Number(problemId);
+
     const res = await fetch('/api/review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ problem_id: Number(problemId), code }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || '분석 실패');
@@ -228,6 +274,7 @@ function renderReview(container, d) {
   const strengthsHtml = (d.strengths || []).map(s => `<li>${s}</li>`).join('') || '<li>-</li>';
   const weaknessesHtml = (d.weaknesses || []).map(w => `<li>${w}</li>`).join('') || '<li>-</li>';
   const feedbackHtml = marked.parse(d.feedback || '');
+  const label = problemLabel(d);
   const betterAlgo = d.better_algorithm
     ? `<div class="summary-item"><div class="summary-label">더 나은 알고리즘</div><div class="summary-value" style="font-size:.85rem;color:var(--yellow)">${d.better_algorithm}</div></div>`
     : '';
@@ -236,8 +283,8 @@ function renderReview(container, d) {
     <div class="result-card">
       <div class="problem-header">
         <span class="problem-title">
-          <a href="https://boj.kr/${d.problem_id}" target="_blank" style="color:inherit;text-decoration:none">
-            ${d.problem_id}. ${d.title}
+          <a href="${problemUrl(d)}" target="_blank" style="color:inherit;text-decoration:none">
+            ${label}. ${d.title}
           </a>
         </span>
         <span class="tier-badge ${tc}">${d.tier_name}</span>
@@ -387,7 +434,7 @@ function renderStats(container, data) {
   let historyHtml = data.history.map(r => {
     const tc = tierClass(r.tier);
     return `<tr>
-      <td><a href="https://boj.kr/${r.problem_id}" target="_blank">${r.problem_id}. ${r.title}</a></td>
+      <td><a href="${problemUrl(r)}" target="_blank">${problemLabel(r)}. ${r.title}</a></td>
       <td><span class="tier-badge ${tc}" style="font-size:.75rem">${r.tier_name}</span></td>
       <td class="${effClass(r.efficiency)}">${effLabel(r.efficiency)}</td>
       <td style="color:var(--text-muted);font-size:.82rem">${r.created_at.slice(0,10)}</td>
@@ -493,7 +540,7 @@ function getFilteredReviews() {
   const TIER_GROUP = { bronze:[1,5], silver:[6,10], gold:[11,15], platinum:[16,20], diamond:[21,25] };
 
   let list = allReviewProblems.filter(p => {
-    if (q && !`${p.problem_id} ${p.title} ${(p.tags||[]).join(' ')}`.toLowerCase().includes(q)) return false;
+    if (q && !`${problemLabel(p)} ${p.title} ${(p.tags||[]).join(' ')}`.toLowerCase().includes(q)) return false;
     if (tier) {
       const [lo,hi] = TIER_GROUP[tier] || [0,30];
       if (p.tier < lo || p.tier > hi) return false;
@@ -508,7 +555,7 @@ function getFilteredReviews() {
   if (sort === 'recent') list.sort((a,b) => b.last_submitted.localeCompare(a.last_submitted));
   else if (sort === 'tier_desc') list.sort((a,b) => b.tier - a.tier);
   else if (sort === 'tier_asc') list.sort((a,b) => a.tier - b.tier);
-  else if (sort === 'pid_asc') list.sort((a,b) => a.problem_id - b.problem_id);
+  else if (sort === 'pid_asc') list.sort((a,b) => problemLabel(a).localeCompare(problemLabel(b), undefined, { numeric: true }));
   return list;
 }
 
@@ -531,15 +578,16 @@ function renderProblemList(container, problems) {
     const lastEff = effList[0] || 'ok';
     const div = document.createElement('div');
     div.className = 'history-card';
-    div.dataset.pid = p.problem_id;
+    div.dataset.platform = p.platform || 'boj';
+    div.dataset.problemRef = p.problem_ref || String(p.problem_id || '');
     div.style.cursor = 'pointer';
     div.innerHTML = `
       <div class="history-card-info">
         <div class="history-card-title">
-          <a href="https://boj.kr/${p.problem_id}" target="_blank"
+          <a href="${problemUrl(p)}" target="_blank"
              style="color:inherit;text-decoration:none"
              onclick="event.stopPropagation()">
-            ${p.problem_id}. ${p.title}
+            ${problemLabel(p)}. ${p.title}
           </a>
         </div>
         <div class="history-card-meta">${(p.tags || []).slice(0,3).join(' · ')}</div>
@@ -551,20 +599,20 @@ function renderProblemList(container, problems) {
           제출 ${p.submission_count}회 · ${p.last_submitted.slice(0,10)}
         </span>
       </div>`;
-    div.addEventListener('click', () => openProblemModal(div.dataset.pid));
+    div.addEventListener('click', () => openProblemModal(div.dataset.platform, div.dataset.problemRef));
     frag.appendChild(div);
   });
   container.appendChild(frag);
 }
 
-async function openProblemModal(problemId) {
+async function openProblemModal(platform, problemRef) {
   const modal = document.getElementById('review-modal');
   const content = document.getElementById('modal-content');
   modal.classList.remove('hidden');
   content.innerHTML = '<div class="alert alert-info"><span class="spinner"></span> 불러오는 중...</div>';
 
   try {
-    const res = await fetch(`/api/reviews/problem/${problemId}`);
+    const res = await fetch(`/api/reviews/problem/${encodeURIComponent(platform)}/${encodeURIComponent(problemRef)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || '실패');
     const reviews = data.reviews;
@@ -585,8 +633,8 @@ async function openProblemModal(problemId) {
     content.innerHTML = `
       <div class="problem-header" style="margin-bottom:12px">
         <span class="problem-title">
-          <a href="https://boj.kr/${first.problem_id}" target="_blank" style="color:inherit;text-decoration:none">
-            ${first.problem_id}. ${first.title}
+          <a href="${problemUrl(first)}" target="_blank" style="color:inherit;text-decoration:none">
+            ${problemLabel(first)}. ${first.title}
           </a>
         </span>
         <span class="tier-badge ${tc}">${first.tier_name}</span>
@@ -738,6 +786,54 @@ importBtn.addEventListener('click', async () => {
   }
 });
 
+const cfImportBtn = document.getElementById('cf-import-btn');
+if (cfImportBtn) {
+  cfImportBtn.dataset.label = 'Codeforces에서 가져오기';
+  cfImportBtn.addEventListener('click', async () => {
+    const handle = document.getElementById('cf-handle').value.trim();
+    const count = Number(document.getElementById('cf-count').value);
+    const apiKey = document.getElementById('cf-api-key').value.trim();
+    const apiSecret = document.getElementById('cf-api-secret').value.trim();
+    const result = document.getElementById('cf-import-result');
+
+    if (!handle) { showError(result, 'Codeforces handle을 입력하세요.'); return; }
+
+    setLoading(cfImportBtn, true);
+    result.innerHTML = '<div class="alert alert-info"><span class="spinner"></span> Codeforces 제출 기록을 가져오는 중입니다...</div>';
+
+    try {
+      const res = await fetch('/api/import-codeforces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          handle,
+          count,
+          api_key: apiKey || null,
+          api_secret: apiSecret || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || '가져오기 실패');
+
+      const sourceMsg = data.has_source
+        ? '<br><span style="color:var(--text-muted);font-size:.82rem">소스 코드 포함 항목이 있어 AI 리뷰까지 바로 이어갈 수 있습니다.</span>'
+        : '<br><span style="color:var(--text-muted);font-size:.82rem">현재는 코드 없이 기록만 가져왔습니다. API Key/Secret을 넣으면 본인 계정 소스 코드도 함께 가져올 수 있습니다.</span>';
+
+      result.innerHTML = `
+        <div class="alert alert-info" style="color:var(--green)">
+          ✅ 완료! <b>${data.handle}</b>의 Codeforces 기록 <b>${data.total_found}</b>개 확인 →
+          <b>${data.imported}</b>개 새로 저장, <b>${data.skipped}</b>개 이미 있음
+          ${sourceMsg}
+        </div>`;
+      loadImportedHistory();
+    } catch (e) {
+      showError(result, e.message);
+    } finally {
+      setLoading(cfImportBtn, false);
+    }
+  });
+}
+
 async function loadImportedHistory() {
   const list = document.getElementById('import-history-list');
   if (!list) return;
@@ -757,6 +853,11 @@ async function loadImportedHistory() {
           </h3>
           <input id="import-search" type="text" placeholder="문제번호 또는 제목 검색..."
             style="flex:2;min-width:150px;padding:6px 10px;font-size:.85rem" />
+          <select id="import-platform-filter" style="flex:1;min-width:110px;padding:6px 8px;font-size:.85rem">
+            <option value="">전체 플랫폼</option>
+            <option value="boj">BOJ</option>
+            <option value="codeforces">Codeforces</option>
+          </select>
           <select id="import-tier-filter" style="flex:1;min-width:110px;padding:6px 8px;font-size:.85rem">
             <option value="">전체 난이도</option>
             <option value="bronze">Bronze</option>
@@ -794,11 +895,13 @@ async function loadImportedHistory() {
 
     function getFiltered() {
       const q = (document.getElementById('import-search').value || '').trim().toLowerCase();
+      const platform = document.getElementById('import-platform-filter').value;
       const tierKey = document.getElementById('import-tier-filter').value;
       const sort = document.getElementById('import-sort').value;
 
       let result = allProblems.filter(p => {
-        if (q && !String(p.problem_id).includes(q) && !p.title.toLowerCase().includes(q)) return false;
+        if (q && !problemLabel(p).toLowerCase().includes(q) && !p.title.toLowerCase().includes(q)) return false;
+        if (platform && (p.platform || 'boj') !== platform) return false;
         if (tierKey) {
           if (tierKey === 'unrated') { if (p.tier !== 0) return false; }
           else { const r = TIER_RANGES[tierKey]; if (p.tier < r[0] || p.tier > r[1]) return false; }
@@ -807,8 +910,8 @@ async function loadImportedHistory() {
       });
 
       result.sort((a, b) => {
-        if (sort === 'id-asc')    return a.problem_id - b.problem_id;
-        if (sort === 'id-desc')   return b.problem_id - a.problem_id;
+        if (sort === 'id-asc')    return problemLabel(a).localeCompare(problemLabel(b), undefined, { numeric: true });
+        if (sort === 'id-desc')   return problemLabel(b).localeCompare(problemLabel(a), undefined, { numeric: true });
         if (sort === 'tier-desc') return b.tier - a.tier;
         if (sort === 'tier-asc')  return a.tier - b.tier;
         return 0;
@@ -864,20 +967,22 @@ async function loadImportedHistory() {
 
       container.innerHTML = pageItems.map(p => {
         const tc = tierClass(p.tier);
+        const cardKey = `${p.platform || 'boj'}-${p.problem_ref || p.problem_id}`;
+        const platformBadge = (p.platform || 'boj') === 'codeforces' ? 'Codeforces' : 'BOJ';
         const actionBtns = p.has_code
-          ? `<button class="btn-sm btn-code btn-view-code" data-pid="${p.problem_id}">코드 보기</button>
-             <button class="btn-sm btn-ai btn-review-imported" data-pid="${p.problem_id}">AI 리뷰</button>`
+          ? `<button class="btn-sm btn-code btn-view-code" data-platform="${p.platform || 'boj'}" data-problem-ref="${p.problem_ref || p.problem_id}" data-box-key="${cardKey}">코드 보기</button>
+             <button class="btn-sm btn-ai btn-review-imported" data-platform="${p.platform || 'boj'}" data-problem-ref="${p.problem_ref || p.problem_id}">AI 리뷰</button>`
           : `<span style="font-size:.75rem;color:var(--text-muted)">코드 없음</span>`;
         return `
-          <div class="history-card" data-pid="${p.problem_id}">
+          <div class="history-card" data-platform="${p.platform || 'boj'}" data-problem-ref="${p.problem_ref || p.problem_id}">
             <div class="history-card-info">
               <div class="history-card-title">
-                <a href="https://boj.kr/${p.problem_id}" target="_blank"
+                <a href="${problemUrl(p)}" target="_blank"
                    style="color:inherit;text-decoration:none">
-                  ${p.problem_id}. ${p.title}
+                  ${problemLabel(p)}. ${p.title}
                 </a>
               </div>
-              <div class="history-card-meta">${p.language || ''}</div>
+              <div class="history-card-meta">${platformBadge}${p.language ? ` · ${p.language}` : ''}</div>
             </div>
             <div class="history-card-right">
               <span class="tier-badge ${tc}" style="font-size:.75rem">${p.tier_name}</span>
@@ -885,7 +990,7 @@ async function loadImportedHistory() {
               <span style="font-size:.78rem;color:var(--text-muted)">${p.imported_at.slice(0,10)}</span>
             </div>
           </div>
-          <div id="code-view-${p.problem_id}" class="hidden"></div>`;
+          <div id="code-view-${cardKey}" class="hidden"></div>`;
       }).join('');
 
       // 코드 보기 버튼
@@ -902,8 +1007,9 @@ async function loadImportedHistory() {
     }
 
     async function toggleCodeView(btn) {
-      const pid = btn.dataset.pid;
-      const box = document.getElementById(`code-view-${pid}`);
+      const platform = btn.dataset.platform;
+      const problemRef = btn.dataset.problemRef;
+      const box = document.getElementById(`code-view-${btn.dataset.boxKey}`);
       if (!box.classList.contains('hidden')) {
         box.classList.add('hidden');
         btn.textContent = '코드 보기';
@@ -916,7 +1022,7 @@ async function loadImportedHistory() {
       box.classList.remove('hidden');
 
       try {
-        const res = await fetch(`/api/solved-history/${pid}`);
+        const res = await fetch(`/api/solved-history/${encodeURIComponent(platform)}/${encodeURIComponent(problemRef)}`);
         const data = await res.json();
         const code = data.code || '';
         box.dataset.loaded = '1';
@@ -937,7 +1043,7 @@ async function loadImportedHistory() {
 
     renderImportCards(getFiltered());
 
-    ['import-search', 'import-tier-filter', 'import-sort'].forEach(id => {
+    ['import-search', 'import-platform-filter', 'import-tier-filter', 'import-sort'].forEach(id => {
       document.getElementById(id).addEventListener('input', () => {
         importPage = 1;
         renderImportCards(getFiltered());
@@ -950,13 +1056,14 @@ async function loadImportedHistory() {
 }
 
 async function requestImportedReview(btn) {
-  const problemId = btn.dataset.pid;
+  const platform = btn.dataset.platform;
+  const problemRef = btn.dataset.problemRef;
   const card = btn.closest('.history-card');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
 
   try {
-    const res = await fetch(`/api/review-imported/${problemId}`, { method: 'POST' });
+    const res = await fetch(`/api/review-imported/${encodeURIComponent(platform)}/${encodeURIComponent(problemRef)}`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || '실패');
 

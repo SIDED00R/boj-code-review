@@ -1,6 +1,12 @@
 """
 solved.ac API + 백준 페이지 크롤링 모듈
 """
+import re
+from functools import lru_cache
+import hashlib
+import random
+import time
+from urllib.parse import urlencode
 import requests
 from bs4 import BeautifulSoup
 
@@ -22,6 +28,12 @@ HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
     "Referer": "https://solved.ac/",
     "Origin": "https://solved.ac",
+}
+
+CODEFORCES_API_BASE = "https://codeforces.com/api"
+CODEFORCES_HEADERS = {
+    "User-Agent": HEADERS["User-Agent"],
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 
@@ -125,6 +137,161 @@ def get_problem_statement(problem_id: int) -> str:
         return "\n\n".join(parts) if parts else "문제 설명을 가져올 수 없습니다."
     except Exception as e:
         return f"크롤링 실패: {e}"
+
+
+def normalize_codeforces_problem_ref(problem_ref: str) -> tuple[int, str]:
+    """
+    허용 형식:
+    - 4A
+    - 4/A
+    - 4-A
+    - 4 A
+    """
+    match = re.match(r"^\s*(\d+)\s*[-/_ ]?\s*([A-Za-z][A-Za-z0-9]*)\s*$", problem_ref or "")
+    if not match:
+        raise ValueError("Codeforces 문제는 '4A' 또는 '4/A' 형식으로 입력해주세요.")
+    contest_id = int(match.group(1))
+    index = match.group(2).upper()
+    return contest_id, index
+
+
+def get_codeforces_problem_info(problem_ref: str) -> dict:
+    contest_id, index = normalize_codeforces_problem_ref(problem_ref)
+    problem = _get_codeforces_problem_lookup().get((contest_id, index))
+    if not problem:
+        raise ValueError(f"Codeforces 문제를 찾을 수 없습니다: {contest_id}{index}")
+
+    rating = problem.get("rating")
+    rating_label = f"Codeforces {rating}" if rating else "Codeforces Unrated"
+    return {
+        "id": 0,
+        "platform": "codeforces",
+        "problem_ref": f"{contest_id}{index}",
+        "contest_id": contest_id,
+        "index": index,
+        "title": problem.get("name", f"Problem {contest_id}{index}"),
+        "tier": 0,
+        "tier_name": rating_label,
+        "tags": problem.get("tags", []),
+        "url": get_problem_url("codeforces", f"{contest_id}{index}"),
+    }
+
+
+def get_codeforces_problem_statement(problem_ref: str) -> str:
+    contest_id, index = normalize_codeforces_problem_ref(problem_ref)
+    urls = [
+        f"https://codeforces.com/problemset/problem/{contest_id}/{index}",
+        f"https://codeforces.com/contest/{contest_id}/problem/{index}",
+    ]
+
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=CODEFORCES_HEADERS, timeout=15)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            statement = soup.select_one(".problem-statement")
+            if statement:
+                return statement.get_text(separator="\n", strip=True)
+        except Exception:
+            continue
+
+    return "문제 설명 자동 수집에 실패했습니다. 제목, 난이도, 태그 기준으로 제한적으로 분석합니다."
+
+
+def get_problem_url(platform: str, problem_ref: str | int) -> str:
+    platform = (platform or "boj").lower()
+    if platform == "codeforces":
+        contest_id, index = normalize_codeforces_problem_ref(str(problem_ref))
+        return f"https://codeforces.com/problemset/problem/{contest_id}/{index}"
+    return f"https://boj.kr/{problem_ref}"
+
+
+def _codeforces_api_request(method_name: str, params: dict | None = None,
+                            api_key: str | None = None, api_secret: str | None = None) -> dict:
+    params = {k: v for k, v in (params or {}).items() if v is not None}
+    params["lang"] = "en"
+
+    if api_key and api_secret:
+        now = int(time.time())
+        rand = f"{random.randint(0, 999999):06d}"
+        signed_params = {**params, "apiKey": api_key, "time": now}
+        sorted_items = sorted((str(k), str(v)) for k, v in signed_params.items())
+        query = urlencode(sorted_items)
+        sig_base = f"{rand}/{method_name}?{query}#{api_secret}"
+        api_sig = rand + hashlib.sha512(sig_base.encode("utf-8")).hexdigest()
+        signed_params["apiSig"] = api_sig
+        params = signed_params
+
+    resp = requests.get(
+        f"{CODEFORCES_API_BASE}/{method_name}",
+        params=params,
+        headers=CODEFORCES_HEADERS,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("status") != "OK":
+        raise ValueError(payload.get("comment", "Codeforces API 오류"))
+    return payload["result"]
+
+
+@lru_cache(maxsize=1)
+def _get_codeforces_problem_lookup() -> dict[tuple[int, str], dict]:
+    lookup = {}
+    result = _codeforces_api_request("problemset.problems")
+    for problem in result.get("problems", []):
+        contest_id = problem.get("contestId")
+        index = str(problem.get("index", "")).upper()
+        if contest_id and index:
+            lookup[(contest_id, index)] = problem
+    return lookup
+
+
+def get_codeforces_user_info(handle: str) -> dict:
+    users = _codeforces_api_request("user.info", {"handles": handle})
+    if not users:
+        raise ValueError("Codeforces 유저를 찾을 수 없습니다.")
+    return users[0]
+
+
+def get_codeforces_user_submissions(handle: str, count: int = 1000,
+                                    api_key: str | None = None,
+                                    api_secret: str | None = None) -> list[dict]:
+    result = _codeforces_api_request(
+        "user.status",
+        {"handle": handle, "from": 1, "count": count, "includeSources": "true" if api_key and api_secret else None},
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+    submissions = []
+    seen = set()
+    for sub in result:
+        if sub.get("verdict") != "OK":
+            continue
+        problem = sub.get("problem") or {}
+        contest_id = problem.get("contestId")
+        index = str(problem.get("index", "")).upper()
+        if not contest_id or not index:
+            continue
+        problem_ref = f"{contest_id}{index}"
+        if problem_ref in seen:
+            continue
+        seen.add(problem_ref)
+        submissions.append({
+            "problem_id": 0,
+            "problem_ref": problem_ref,
+            "contest_id": contest_id,
+            "index": index,
+            "title": problem.get("name", problem_ref),
+            "tier": 0,
+            "tier_name": f"Codeforces {problem['rating']}" if problem.get("rating") else "Codeforces Unrated",
+            "tags": problem.get("tags", []),
+            "language": sub.get("programmingLanguage", ""),
+            "code": sub.get("source", "") or "",
+            "submission_id": sub.get("id"),
+            "problem_url": get_problem_url("codeforces", problem_ref),
+        })
+    return submissions
 
 
 def search_problems_by_tag(tag_key: str, min_tier: int, max_tier: int,

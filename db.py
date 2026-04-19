@@ -61,8 +61,11 @@ def init_db():
             CREATE TABLE IF NOT EXISTS reviews (
                 id               SERIAL PRIMARY KEY,
                 problem_id       INTEGER NOT NULL,
+                platform         TEXT NOT NULL DEFAULT 'boj',
+                problem_ref      TEXT NOT NULL DEFAULT '',
                 title            TEXT NOT NULL,
                 tier             INTEGER NOT NULL,
+                tier_name        TEXT NOT NULL DEFAULT '',
                 tags             TEXT NOT NULL,
                 code             TEXT NOT NULL,
                 feedback         TEXT NOT NULL,
@@ -87,8 +90,11 @@ def init_db():
             CREATE TABLE IF NOT EXISTS reviews (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 problem_id       INTEGER NOT NULL,
+                platform         TEXT NOT NULL DEFAULT 'boj',
+                problem_ref      TEXT NOT NULL DEFAULT '',
                 title            TEXT NOT NULL,
                 tier             INTEGER NOT NULL,
+                tier_name        TEXT NOT NULL DEFAULT '',
                 tags             TEXT NOT NULL,
                 code             TEXT NOT NULL,
                 feedback         TEXT NOT NULL,
@@ -111,6 +117,9 @@ def init_db():
 
     # 기존 테이블에 새 컬럼 추가 (없을 때만)
     new_columns = [
+        ("platform",         "TEXT NOT NULL DEFAULT 'boj'"),
+        ("problem_ref",      "TEXT NOT NULL DEFAULT ''"),
+        ("tier_name",        "TEXT NOT NULL DEFAULT ''"),
         ("complexity",       "TEXT NOT NULL DEFAULT ''"),
         ("better_algorithm", "TEXT NOT NULL DEFAULT ''"),
         ("strengths",        "TEXT NOT NULL DEFAULT '[]'"),
@@ -128,31 +137,63 @@ def init_db():
                 cur.execute("ROLLBACK TO SAVEPOINT _add_col")
             # SQLite는 예외 무시
 
+    cur.execute("UPDATE reviews SET platform = 'boj' WHERE platform IS NULL OR platform = ''")
+    cur.execute("UPDATE reviews SET problem_ref = CAST(problem_id AS TEXT) WHERE problem_ref IS NULL OR problem_ref = ''")
+    cur.execute("UPDATE reviews SET tier_name = '' WHERE tier_name IS NULL")
+
     # solved_history 테이블 (가져온 기록 - AI 리뷰 없음)
     if USE_POSTGRES:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS solved_history (
-                problem_id   INTEGER PRIMARY KEY,
+                problem_id   INTEGER NOT NULL,
+                platform     TEXT NOT NULL DEFAULT 'boj',
+                problem_ref  TEXT NOT NULL DEFAULT '',
                 title        TEXT NOT NULL,
                 tier         INTEGER NOT NULL,
+                tier_name    TEXT NOT NULL DEFAULT '',
                 tags         TEXT NOT NULL DEFAULT '[]',
                 code         TEXT NOT NULL DEFAULT '',
                 language     TEXT NOT NULL DEFAULT '',
-                imported_at  TEXT NOT NULL
+                imported_at  TEXT NOT NULL,
+                PRIMARY KEY (platform, problem_ref)
             )
         """)
     else:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS solved_history (
-                problem_id   INTEGER PRIMARY KEY,
+                problem_id   INTEGER NOT NULL,
+                platform     TEXT NOT NULL DEFAULT 'boj',
+                problem_ref  TEXT NOT NULL DEFAULT '',
                 title        TEXT NOT NULL,
                 tier         INTEGER NOT NULL,
+                tier_name    TEXT NOT NULL DEFAULT '',
                 tags         TEXT NOT NULL DEFAULT '[]',
                 code         TEXT NOT NULL DEFAULT '',
                 language     TEXT NOT NULL DEFAULT '',
-                imported_at  TEXT NOT NULL
+                imported_at  TEXT NOT NULL,
+                PRIMARY KEY (platform, problem_ref)
             )
         """)
+
+    solved_columns = [
+        ("platform", "TEXT NOT NULL DEFAULT 'boj'"),
+        ("problem_ref", "TEXT NOT NULL DEFAULT ''"),
+        ("tier_name", "TEXT NOT NULL DEFAULT ''"),
+    ]
+    for col_name, col_def in solved_columns:
+        try:
+            if USE_POSTGRES:
+                cur.execute("SAVEPOINT _add_solved_col")
+            cur.execute(f"ALTER TABLE solved_history ADD COLUMN {col_name} {col_def}")
+            if USE_POSTGRES:
+                cur.execute("RELEASE SAVEPOINT _add_solved_col")
+        except Exception:
+            if USE_POSTGRES:
+                cur.execute("ROLLBACK TO SAVEPOINT _add_solved_col")
+
+    cur.execute("UPDATE solved_history SET platform = 'boj' WHERE platform IS NULL OR platform = ''")
+    cur.execute("UPDATE solved_history SET problem_ref = CAST(problem_id AS TEXT) WHERE problem_ref IS NULL OR problem_ref = ''")
+    cur.execute("UPDATE solved_history SET tier_name = '' WHERE tier_name IS NULL")
 
     conn.commit()
     if USE_POSTGRES:
@@ -167,31 +208,38 @@ def init_db():
 def save_review(problem_id: int, title: str, tier: int, tags: list,
                 code: str, feedback: str, efficiency: str,
                 complexity: str = "", better_algorithm: str = "",
-                strengths: list = None, weaknesses: list = None):
+                strengths: list = None, weaknesses: list = None,
+                platform: str = "boj", problem_ref: str | None = None,
+                tier_name: str = ""):
     conn = get_connection()
     cur = conn.cursor()
     p = _ph()
 
     strengths = strengths or []
     weaknesses = weaknesses or []
+    platform = (platform or "boj").strip().lower()
+    problem_ref = (problem_ref or str(problem_id)).strip()
 
     # 같은 문제를 이전에 제출한 적 있는지 확인 (태그 통계 중복 방지)
-    cur.execute(f"SELECT COUNT(*) FROM reviews WHERE problem_id = {p}", (problem_id,))
+    cur.execute(
+        f"SELECT COUNT(*) FROM reviews WHERE platform = {p} AND problem_ref = {p}",
+        (platform, problem_ref),
+    )
     row = cur.fetchone()
     is_first_submission = (row[0] == 0)
 
     cur.execute(f"""
-        INSERT INTO reviews (problem_id, title, tier, tags, code, feedback, efficiency,
-                             complexity, better_algorithm, strengths, weaknesses, created_at)
-        VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
-    """, (problem_id, title, tier, json.dumps(tags, ensure_ascii=False),
-          code, feedback, efficiency, complexity, better_algorithm or "",
-          json.dumps(strengths, ensure_ascii=False),
-          json.dumps(weaknesses, ensure_ascii=False),
-          datetime.now().isoformat()))
+        INSERT INTO reviews (problem_id, platform, problem_ref, title, tier, tier_name, tags,
+                             code, feedback, efficiency, complexity, better_algorithm,
+                             strengths, weaknesses, created_at)
+        VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+    """, (problem_id, platform, problem_ref, title, tier, tier_name,
+          json.dumps(tags, ensure_ascii=False), code, feedback, efficiency,
+          complexity, better_algorithm or "", json.dumps(strengths, ensure_ascii=False),
+          json.dumps(weaknesses, ensure_ascii=False), datetime.now().isoformat()))
 
     # 처음 제출한 문제일 때만 태그 통계 업데이트
-    if is_first_submission:
+    if is_first_submission and platform == "boj":
         for tag in tags:
             if USE_POSTGRES:
                 cur.execute(f"""
@@ -229,6 +277,36 @@ def _rows_to_dicts(cur, rows):
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in rows]
     return [dict(r) for r in rows]
+
+
+def _normalize_review_row(row: dict) -> dict:
+    from api_client import TIER_NAMES
+
+    row["platform"] = (row.get("platform") or "boj").lower()
+    row["problem_ref"] = row.get("problem_ref") or str(row.get("problem_id", ""))
+    if isinstance(row.get("tags"), str):
+        row["tags"] = json.loads(row["tags"])
+    if isinstance(row.get("strengths"), str):
+        row["strengths"] = json.loads(row.get("strengths") or "[]")
+    else:
+        row["strengths"] = row.get("strengths", [])
+    if isinstance(row.get("weaknesses"), str):
+        row["weaknesses"] = json.loads(row.get("weaknesses") or "[]")
+    else:
+        row["weaknesses"] = row.get("weaknesses", [])
+    row["tier_name"] = row.get("tier_name") or TIER_NAMES.get(row.get("tier", 0), "Unrated")
+    return row
+
+
+def _normalize_solved_row(row: dict) -> dict:
+    from api_client import TIER_NAMES
+
+    row["platform"] = (row.get("platform") or "boj").lower()
+    row["problem_ref"] = row.get("problem_ref") or str(row.get("problem_id", ""))
+    if isinstance(row.get("tags"), str):
+        row["tags"] = json.loads(row["tags"])
+    row["tier_name"] = row.get("tier_name") or TIER_NAMES.get(row.get("tier", 0), "Unrated")
+    return row
 
 
 def get_tag_stats() -> list:
@@ -295,26 +373,41 @@ def get_problems_grouped() -> list:
     cur.execute("""
         SELECT
             problem_id,
+            platform,
+            problem_ref,
             title,
             tier,
+            tier_name,
             tags,
             COUNT(*) AS submission_count,
             MAX(created_at) AS last_submitted,
             STRING_AGG(efficiency, ',' ORDER BY created_at DESC) AS efficiencies
         FROM reviews
-        GROUP BY problem_id, title, tier, tags
+        GROUP BY problem_id, platform, problem_ref, title, tier, tier_name, tags
         ORDER BY last_submitted DESC
     """ if USE_POSTGRES else """
         SELECT
             problem_id,
+            platform,
+            problem_ref,
             title,
             tier,
+            tier_name,
             tags,
             COUNT(*) AS submission_count,
             MAX(created_at) AS last_submitted,
-            GROUP_CONCAT(efficiency) AS efficiencies
+            (
+                SELECT GROUP_CONCAT(efficiency)
+                FROM (
+                    SELECT efficiency
+                    FROM reviews r2
+                    WHERE r2.platform = reviews.platform
+                      AND r2.problem_ref = reviews.problem_ref
+                    ORDER BY r2.created_at DESC
+                )
+            ) AS efficiencies
         FROM reviews
-        GROUP BY problem_id
+        GROUP BY problem_id, platform, problem_ref, title, tier, tier_name, tags
         ORDER BY last_submitted DESC
     """)
     rows = _rows_to_dicts(cur, cur.fetchall())
@@ -322,29 +415,27 @@ def get_problems_grouped() -> list:
         cur.close()
     conn.close()
     for r in rows:
-        r["tags"] = json.loads(r["tags"])
+        _normalize_review_row(r)
     return rows
 
 
-def get_reviews_by_problem(problem_id: int) -> list:
+def get_reviews_by_problem(platform: str, problem_ref: str) -> list:
     """특정 문제의 모든 제출 기록 반환"""
     p = _ph()
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(f"""
-        SELECT id, problem_id, title, tier, tags, code, efficiency, complexity,
+        SELECT id, problem_id, platform, problem_ref, title, tier, tier_name, tags, code, efficiency, complexity,
                better_algorithm, strengths, weaknesses, feedback, created_at
-        FROM reviews WHERE problem_id = {p}
+        FROM reviews WHERE platform = {p} AND problem_ref = {p}
         ORDER BY created_at DESC
-    """, (problem_id,))
+    """, (platform, problem_ref))
     rows = _rows_to_dicts(cur, cur.fetchall())
     if USE_POSTGRES:
         cur.close()
     conn.close()
     for r in rows:
-        r["tags"] = json.loads(r["tags"])
-        r["strengths"] = json.loads(r.get("strengths") or "[]")
-        r["weaknesses"] = json.loads(r.get("weaknesses") or "[]")
+        _normalize_review_row(r)
     return rows
 
 
@@ -353,9 +444,9 @@ def get_tier_history() -> list:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT problem_id, title, tier, created_at
+        SELECT problem_id, platform, problem_ref, title, tier, tier_name, created_at
         FROM reviews
-        WHERE tier > 0
+        WHERE platform = 'boj' AND tier > 0
         ORDER BY created_at ASC
     """)
     rows = _rows_to_dicts(cur, cur.fetchall())
@@ -370,7 +461,7 @@ def get_review_history(limit: int = 10) -> list:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(f"""
-        SELECT id, problem_id, title, tier, tags, efficiency, created_at
+        SELECT id, problem_id, platform, problem_ref, title, tier, tier_name, tags, efficiency, created_at
         FROM reviews ORDER BY created_at DESC LIMIT {p}
     """, (limit,))
     rows = _rows_to_dicts(cur, cur.fetchall())
@@ -378,7 +469,7 @@ def get_review_history(limit: int = 10) -> list:
         cur.close()
     conn.close()
     for r in rows:
-        r["tags"] = json.loads(r["tags"])
+        _normalize_review_row(r)
     return rows
 
 
@@ -387,7 +478,8 @@ def get_review_detail(review_id: int) -> dict | None:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(f"""
-        SELECT id, problem_id, title, tier, tags, code, feedback, efficiency, created_at
+        SELECT id, problem_id, platform, problem_ref, title, tier, tier_name, tags, code,
+               feedback, efficiency, complexity, better_algorithm, strengths, weaknesses, created_at
         FROM reviews WHERE id = {p}
     """, (review_id,))
     rows = _rows_to_dicts(cur, cur.fetchall())
@@ -396,44 +488,43 @@ def get_review_detail(review_id: int) -> dict | None:
     conn.close()
     if not rows:
         return None
-    r = rows[0]
-    r["tags"] = json.loads(r["tags"])
-    r["strengths"] = json.loads(r.get("strengths") or "[]")
-    r["weaknesses"] = json.loads(r.get("weaknesses") or "[]")
-    return r
+    return _normalize_review_row(rows[0])
 
 
 def save_solved_problem(problem_id: int, title: str, tier: int, tags: list,
-                         code: str = "", language: str = ""):
+                         code: str = "", language: str = "", platform: str = "boj",
+                         problem_ref: str | None = None, tier_name: str = ""):
     """풀었던 문제 기록 저장 (리뷰 없음 - 추천 제외용)"""
     conn = get_connection()
     cur = conn.cursor()
     p = _ph()
+    platform = (platform or "boj").strip().lower()
+    problem_ref = (problem_ref or str(problem_id)).strip()
     if USE_POSTGRES:
         cur.execute(f"""
-            INSERT INTO solved_history (problem_id, title, tier, tags, code, language, imported_at)
-            VALUES ({p},{p},{p},{p},{p},{p},{p})
-            ON CONFLICT (problem_id) DO NOTHING
-        """, (problem_id, title, tier, json.dumps(tags, ensure_ascii=False),
-              code, language, datetime.now().isoformat()))
+            INSERT INTO solved_history (problem_id, platform, problem_ref, title, tier, tier_name, tags, code, language, imported_at)
+            VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+            ON CONFLICT (platform, problem_ref) DO NOTHING
+        """, (problem_id, platform, problem_ref, title, tier, tier_name,
+              json.dumps(tags, ensure_ascii=False), code, language, datetime.now().isoformat()))
     else:
         cur.execute(f"""
             INSERT OR IGNORE INTO solved_history
-                (problem_id, title, tier, tags, code, language, imported_at)
-            VALUES ({p},{p},{p},{p},{p},{p},{p})
-        """, (problem_id, title, tier, json.dumps(tags, ensure_ascii=False),
-              code, language, datetime.now().isoformat()))
+                (problem_id, platform, problem_ref, title, tier, tier_name, tags, code, language, imported_at)
+            VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+        """, (problem_id, platform, problem_ref, title, tier, tier_name,
+              json.dumps(tags, ensure_ascii=False), code, language, datetime.now().isoformat()))
     conn.commit()
     if USE_POSTGRES:
         cur.close()
     conn.close()
 
 
-def delete_solved_problem(problem_id: int):
+def delete_solved_problem(platform: str, problem_ref: str):
     p = _ph()
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(f"DELETE FROM solved_history WHERE problem_id = {p}", (problem_id,))
+    cur.execute(f"DELETE FROM solved_history WHERE platform = {p} AND problem_ref = {p}", (platform, problem_ref))
     conn.commit()
     if USE_POSTGRES:
         cur.close()
@@ -461,11 +552,26 @@ def get_cached_problem_info(problem_id: int) -> dict | None:
     cur = conn.cursor()
 
     # reviews 테이블 먼저
-    cur.execute(f"SELECT title, tier, tags FROM reviews WHERE problem_id = {p} ORDER BY created_at DESC LIMIT 1", (problem_id,))
+    cur.execute(f"""
+        SELECT title, tier, tier_name, tags
+        FROM reviews
+        WHERE platform = 'boj' AND problem_id = {p}
+        ORDER BY created_at DESC LIMIT 1
+    """, (problem_id,))
     row = cur.fetchone()
     if not row:
         # solved_history 확인
-        cur.execute(f"SELECT title, tier, tags FROM solved_history WHERE problem_id = {p}", (problem_id,))
+        cur.execute("""
+            SELECT title, tier, tier_name, tags
+            FROM solved_history
+            WHERE platform = 'boj' AND problem_id = ?
+            LIMIT 1
+        """ if not USE_POSTGRES else f"""
+            SELECT title, tier, tier_name, tags
+            FROM solved_history
+            WHERE platform = 'boj' AND problem_id = {p}
+            LIMIT 1
+        """, (problem_id,))
         row = cur.fetchone()
 
     if USE_POSTGRES:
@@ -475,32 +581,34 @@ def get_cached_problem_info(problem_id: int) -> dict | None:
     if not row:
         return None
 
-    title, tier, tags_json = row[0], row[1], row[2]
+    if len(row) == 4:
+        title, tier, tier_name, tags_json = row[0], row[1], row[2], row[3]
+    else:
+        title, tier, tags_json = row[0], row[1], row[2]
+        tier_name = TIER_NAMES.get(tier, "Unrated")
     tags = json.loads(tags_json) if tags_json else []
     return {
         "id": problem_id,
         "title": title,
         "tier": tier,
-        "tier_name": TIER_NAMES.get(tier, "Unrated"),
+        "tier_name": tier_name or TIER_NAMES.get(tier, "Unrated"),
         "tags": tags,
     }
 
 
-def get_solved_problem(problem_id: int) -> dict | None:
+def get_solved_problem(platform: str, problem_ref: str) -> dict | None:
     """가져온 기록에서 특정 문제 조회"""
     p = _ph()
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(f"SELECT * FROM solved_history WHERE problem_id = {p}", (problem_id,))
+    cur.execute(f"SELECT * FROM solved_history WHERE platform = {p} AND problem_ref = {p}", (platform, problem_ref))
     rows = _rows_to_dicts(cur, cur.fetchall())
     if USE_POSTGRES:
         cur.close()
     conn.close()
     if not rows:
         return None
-    r = rows[0]
-    r["tags"] = json.loads(r["tags"])
-    return r
+    return _normalize_solved_row(rows[0])
 
 
 def get_solved_history() -> list:
@@ -508,7 +616,7 @@ def get_solved_history() -> list:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT problem_id, title, tier, language, imported_at,
+        SELECT problem_id, platform, problem_ref, title, tier, tier_name, language, imported_at,
                CASE WHEN code != '' THEN 1 ELSE 0 END AS has_code
         FROM solved_history ORDER BY imported_at DESC
     """)
@@ -517,6 +625,7 @@ def get_solved_history() -> list:
         cur.close()
     conn.close()
     for r in rows:
+        _normalize_solved_row(r)
         r["has_code"] = bool(r["has_code"])
     return rows
 
@@ -595,3 +704,19 @@ def get_solved_problem_ids() -> set:
         cur.close()
     conn.close()
     return ids
+
+
+def get_solved_problem_keys() -> set[tuple[str, str]]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT platform, problem_ref FROM reviews")
+    keys = {(r[0], str(r[1])) for r in cur.fetchall()}
+    try:
+        cur.execute("SELECT platform, problem_ref FROM solved_history")
+        keys |= {(r[0], str(r[1])) for r in cur.fetchall()}
+    except Exception:
+        pass
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+    return keys

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>백준 코드 리뷰 & 문제 추천</title>
+  <title>알고리즘 코드 리뷰 & 문제 추천</title>
   <link rel="stylesheet" href="/static/style.css?v=20260402" />
   <!-- marked.js for markdown rendering -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -14,7 +14,7 @@
 <body>
   <header>
     <div class="header-inner">
-      <span class="logo">🧠 BOJ 코드 리뷰</span>
+      <span class="logo">🧠 알고리즘 코드 리뷰</span>
       <nav>
         <button class="tab-btn active" data-tab="review">코드 리뷰</button>
         <button class="tab-btn" data-tab="recommend">문제 추천</button>
@@ -32,11 +32,27 @@
     <section id="tab-review" class="tab-content active">
       <div class="card">
         <h2>코드 리뷰</h2>
-        <p class="desc">백준 문제 번호와 풀이 코드를 입력하면 AI가 분석해드립니다.</p>
+        <p class="desc">백준 또는 Codeforces 문제 번호와 풀이 코드를 입력하면 AI가 분석해드립니다.</p>
 
         <div class="form-row">
-          <label>문제 번호</label>
-          <input id="problem-id" type="number" placeholder="예) 1000" min="1" />
+          <label>플랫폼</label>
+          <select id="problem-platform">
+            <option value="boj" selected>백준</option>
+            <option value="codeforces">Codeforces</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <label id="problem-id-label">문제 번호</label>
+          <input id="problem-id" type="text" placeholder="예) 1000" />
+          <p id="problem-id-help" class="desc" style="font-size:.8rem;margin-top:6px;color:var(--text-muted)">
+            백준: 숫자만 입력하세요. 예) 1000
+          </p>
+        </div>
+
+        <div class="form-row">
+          <label>문제 설명 <span style="color:var(--text-muted);font-size:.8rem">(선택)</span></label>
+          <textarea id="problem-statement" placeholder="Codeforces 문제문 자동 수집이 실패하면 여기에 직접 붙여 넣을 수 있습니다." rows="6" spellcheck="false"></textarea>
         </div>
 
         <div class="form-row">
@@ -181,6 +197,50 @@
       </div>
 
       <div id="import-result"></div>
+
+      <div class="card" style="margin-top:16px">
+        <details open>
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px">
+            <span class="toggle-arrow">▶</span>
+            <h2 style="margin:0;display:inline">Codeforces 가져오기</h2>
+          </summary>
+          <p class="desc" style="margin-top:12px">
+            Codeforces handle로 AC 기록을 가져옵니다. 소스 코드까지 같이 가져오려면 본인 계정 API Key/Secret이 필요합니다.
+          </p>
+
+          <div class="form-row">
+            <label>Codeforces handle</label>
+            <input id="cf-handle" type="text" placeholder="예) sidedoor" value="sidedoor" />
+          </div>
+
+          <div class="form-row">
+            <label>가져올 제출 수</label>
+            <select id="cf-count">
+              <option value="100">최근 100개</option>
+              <option value="200" selected>최근 200개</option>
+              <option value="500">최근 500개</option>
+              <option value="1000">최근 1000개</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label>API Key <span style="color:var(--text-muted);font-size:.8rem">(선택)</span></label>
+            <input id="cf-api-key" type="password" placeholder="Codeforces API Key" />
+          </div>
+
+          <div class="form-row">
+            <label>API Secret <span style="color:var(--text-muted);font-size:.8rem">(선택)</span></label>
+            <input id="cf-api-secret" type="password" placeholder="Codeforces API Secret" />
+            <p class="desc" style="font-size:.78rem;margin-top:6px;color:var(--text-muted)">
+              입력칸을 비워두면 서버의 `.env`에 있는 `CODEFORCES_API_KEY`, `CODEFORCES_API_SECRET`을 우선 사용합니다.
+            </p>
+          </div>
+
+          <button id="cf-import-btn" class="btn-primary">Codeforces에서 가져오기</button>
+        </details>
+      </div>
+
+      <div id="cf-import-result"></div>
       <div id="import-history-list"></div>
     </section>
 

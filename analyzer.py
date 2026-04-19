@@ -27,15 +27,19 @@ def analyze_code(problem_info: dict, problem_statement: str, code: str) -> dict:
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
     tags_str = ", ".join(problem_info["tags"]) if problem_info["tags"] else "태그 없음"
+    platform = (problem_info.get("platform") or "boj").lower()
+    platform_label = "Codeforces" if platform == "codeforces" else "백준"
+    problem_label = problem_info.get("problem_ref") or problem_info.get("id")
 
     system_prompt = """당신은 알고리즘 코드 리뷰 전문가입니다.
-주어진 백준 문제와 사용자의 풀이 코드를 분석하여 구체적이고 교육적인 피드백을 제공합니다.
+주어진 경쟁 프로그래밍 문제와 사용자의 풀이 코드를 분석하여 구체적이고 교육적인 피드백을 제공합니다.
 모든 응답은 반드시 한국어로 작성하세요. JSON 형식으로만 응답하세요."""
 
-    user_prompt = f"""다음 백준 문제와 풀이 코드를 분석해주세요.
+    user_prompt = f"""다음 {platform_label} 문제와 풀이 코드를 분석해주세요.
 
 ## 문제 정보
-- 문제 번호: {problem_info['id']}
+- 플랫폼: {platform_label}
+- 문제 식별자: {problem_label}
 - 제목: {problem_info['title']}
 - 난이도: {problem_info['tier_name']} (티어 {problem_info['tier']})
 - 알고리즘 태그: {tags_str}

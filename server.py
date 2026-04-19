@@ -2,6 +2,7 @@
 FastAPI 웹 서버
 """
 import os
+import time
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -16,7 +17,7 @@ import api_client
 import analyzer
 import recommender
 
-app = FastAPI(title="백준 코드 리뷰 & 문제 추천")
+app = FastAPI(title="알고리즘 코드 리뷰 & 문제 추천")
 
 # static 폴더 마운트
 STATIC_DIR = Path(__file__).parent / "static"
@@ -31,7 +32,10 @@ db.init_db()
 # ──────────────────────────────────────────────
 
 class ReviewRequest(BaseModel):
-    problem_id: int
+    platform: str = "boj"
+    problem_id: int | None = None
+    problem_ref: str | None = None
+    problem_statement: str | None = None
     code: str
 
 
@@ -46,8 +50,18 @@ class GithubImportRequest(BaseModel):
     token: str | None = None
 
 
+class CodeforcesImportRequest(BaseModel):
+    handle: str
+    count: int = 200
+    api_key: str | None = None
+    api_secret: str | None = None
+
+
 class ReviewResponse(BaseModel):
     problem_id: int
+    platform: str
+    problem_ref: str
+    problem_url: str
     title: str
     tier: int
     tier_name: str
@@ -69,6 +83,47 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+def _resolve_problem(platform: str, problem_id: int | None, problem_ref: str | None,
+                     custom_statement: str | None = None) -> tuple[dict, str]:
+    platform = (platform or "boj").strip().lower()
+    if platform not in {"boj", "codeforces"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 플랫폼입니다. 'boj' 또는 'codeforces'만 가능합니다.")
+
+    if platform == "codeforces":
+        if not (problem_ref or "").strip():
+            raise HTTPException(status_code=400, detail="Codeforces 문제 번호를 입력하세요. 예: 4A 또는 4/A")
+        try:
+            info = api_client.get_codeforces_problem_info(problem_ref.strip())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Codeforces 문제 조회 실패: {e}")
+        statement = (custom_statement or "").strip() or api_client.get_codeforces_problem_statement(info["problem_ref"])
+        return info, statement
+
+    if problem_id is None:
+        raise HTTPException(status_code=400, detail="백준 문제 번호를 입력하세요.")
+
+    info = db.get_cached_problem_info(problem_id)
+    if not info:
+        try:
+            info = api_client.get_problem_info(problem_id)
+        except Exception:
+            info = {
+                "id": problem_id,
+                "platform": "boj",
+                "problem_ref": str(problem_id),
+                "title": f"문제 {problem_id}",
+                "tier": 0,
+                "tier_name": "Unrated",
+                "tags": [],
+            }
+    info["platform"] = "boj"
+    info["problem_ref"] = str(problem_id)
+    statement = (custom_statement or "").strip() or api_client.get_problem_statement(problem_id)
+    return info, statement
+
+
 @app.post("/api/review", response_model=ReviewResponse)
 def review_code(req: ReviewRequest):
     if not os.environ.get("OPENAI_API_KEY"):
@@ -77,21 +132,7 @@ def review_code(req: ReviewRequest):
     if not req.code.strip():
         raise HTTPException(status_code=400, detail="코드가 비어있습니다.")
 
-    # DB 캐시 우선 조회 → solved.ac → 실패 시 기본값 사용
-    problem_info = db.get_cached_problem_info(req.problem_id)
-    if not problem_info:
-        try:
-            problem_info = api_client.get_problem_info(req.problem_id)
-        except Exception:
-            problem_info = {
-                "id": req.problem_id,
-                "title": f"문제 {req.problem_id}",
-                "tier": 0,
-                "tier_name": "Unrated",
-                "tags": [],
-            }
-
-    statement = api_client.get_problem_statement(req.problem_id)
+    problem_info, statement = _resolve_problem(req.platform, req.problem_id, req.problem_ref, req.problem_statement)
 
     try:
         result = analyzer.analyze_code(problem_info, statement, req.code)
@@ -99,9 +140,10 @@ def review_code(req: ReviewRequest):
         raise HTTPException(status_code=500, detail=f"코드 분석 실패: {e}")
 
     db.save_review(
-        problem_id=req.problem_id,
+        problem_id=problem_info["id"],
         title=problem_info["title"],
         tier=problem_info["tier"],
+        tier_name=problem_info["tier_name"],
         tags=problem_info["tags"],
         code=req.code,
         feedback=result.get("feedback", ""),
@@ -110,10 +152,15 @@ def review_code(req: ReviewRequest):
         better_algorithm=result.get("better_algorithm") or "",
         strengths=result.get("strengths", []),
         weaknesses=result.get("weaknesses", []),
+        platform=problem_info["platform"],
+        problem_ref=problem_info["problem_ref"],
     )
 
     return ReviewResponse(
-        problem_id=req.problem_id,
+        problem_id=problem_info["id"],
+        platform=problem_info["platform"],
+        problem_ref=problem_info["problem_ref"],
+        problem_url=api_client.get_problem_url(problem_info["platform"], problem_info["problem_ref"]),
         title=problem_info["title"],
         tier=problem_info["tier"],
         tier_name=problem_info["tier_name"],
@@ -129,26 +176,17 @@ def review_code(req: ReviewRequest):
 
 @app.get("/api/reviews")
 def list_reviews(limit: int = 50):
-    history = db.get_review_history(limit)
-    for r in history:
-        r["tier_name"] = api_client.TIER_NAMES.get(r["tier"], "?")
-    return {"reviews": history}
+    return {"reviews": db.get_review_history(limit)}
 
 
 @app.get("/api/reviews/grouped")
 def list_reviews_grouped():
-    problems = db.get_problems_grouped()
-    for p in problems:
-        p["tier_name"] = api_client.TIER_NAMES.get(p["tier"], "?")
-    return {"problems": problems}
+    return {"problems": db.get_problems_grouped()}
 
 
-@app.get("/api/reviews/problem/{problem_id}")
-def get_reviews_by_problem(problem_id: int):
-    reviews = db.get_reviews_by_problem(problem_id)
-    for r in reviews:
-        r["tier_name"] = api_client.TIER_NAMES.get(r["tier"], "?")
-    return {"reviews": reviews}
+@app.get("/api/reviews/problem/{platform}/{problem_ref}")
+def get_reviews_by_problem(platform: str, problem_ref: str):
+    return {"reviews": db.get_reviews_by_problem(platform, problem_ref)}
 
 
 @app.get("/api/reviews/{review_id}")
@@ -156,7 +194,6 @@ def get_review(review_id: int):
     review = db.get_review_detail(review_id)
     if not review:
         raise HTTPException(status_code=404, detail="리뷰를 찾을 수 없습니다.")
-    review["tier_name"] = api_client.TIER_NAMES.get(review["tier"], "?")
     return review
 
 
@@ -183,19 +220,13 @@ def get_recommendations():
 
 @app.get("/api/tier-history")
 def get_tier_history():
-    rows = db.get_tier_history()
-    for r in rows:
-        r["tier_name"] = api_client.TIER_NAMES.get(r["tier"], "?")
-    return {"history": rows}
+    return {"history": db.get_tier_history()}
 
 
 @app.get("/api/stats")
 def get_stats():
     tag_stats = db.get_tag_stats()
     history = db.get_review_history(20)
-
-    for r in history:
-        r["tier_name"] = api_client.TIER_NAMES.get(r["tier"], "?")
 
     avg_tier = db.get_average_tier()
 
@@ -249,9 +280,12 @@ def import_from_github(req: GithubImportRequest):
                 problem_id=problem_id,
                 title=info["title"],
                 tier=info["tier"],
+                tier_name=info["tier_name"],
                 tags=info["tags"],
                 code=code,
                 language=p.get("language", ""),
+                platform="boj",
+                problem_ref=str(problem_id),
             )
             imported += 1
 
@@ -299,9 +333,12 @@ def import_history(req: ImportRequest):
                 problem_id=problem_id,
                 title=info["title"],
                 tier=info["tier"],
+                tier_name=info["tier_name"],
                 tags=info["tags"],
                 code=code,
                 language=sub.get("language", ""),
+                platform="boj",
+                problem_ref=str(problem_id),
             )
             imported += 1
 
@@ -313,26 +350,84 @@ def import_history(req: ImportRequest):
     }
 
 
-@app.post("/api/review-imported/{problem_id}")
-def review_imported(problem_id: int):
+@app.post("/api/import-codeforces")
+def import_codeforces_history(req: CodeforcesImportRequest):
+    handle = req.handle.strip()
+    if not handle:
+        raise HTTPException(status_code=400, detail="Codeforces handle을 입력하세요.")
+
+    api_key = (req.api_key or os.environ.get("CODEFORCES_API_KEY") or "").strip() or None
+    api_secret = (req.api_secret or os.environ.get("CODEFORCES_API_SECRET") or "").strip() or None
+    if bool(api_key) != bool(api_secret):
+        raise HTTPException(status_code=400, detail="Codeforces API Key와 Secret은 둘 다 입력하거나 둘 다 비워두세요.")
+
+    try:
+        user = api_client.get_codeforces_user_info(handle)
+        time.sleep(2.1)
+        submissions = api_client.get_codeforces_user_submissions(
+            handle,
+            count=max(1, min(req.count, 1000)),
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Codeforces 기록 조회 실패: {e}")
+
+    existing_keys = db.get_solved_problem_keys()
+    new_subs = [s for s in submissions if ("codeforces", s["problem_ref"]) not in existing_keys]
+    skipped = len(submissions) - len(new_subs)
+
+    for sub in new_subs:
+        db.save_solved_problem(
+            problem_id=0,
+            title=sub["title"],
+            tier=0,
+            tier_name=sub["tier_name"],
+            tags=sub["tags"],
+            code=sub["code"],
+            language=sub.get("language", ""),
+            platform="codeforces",
+            problem_ref=sub["problem_ref"],
+        )
+
+    return {
+        "handle": user.get("handle", handle),
+        "total_found": len(submissions),
+        "imported": len(new_subs),
+        "skipped": skipped,
+        "has_source": any(bool(s.get("code")) for s in submissions),
+    }
+
+
+@app.post("/api/review-imported/{platform}/{problem_ref}")
+def review_imported(platform: str, problem_ref: str):
     """가져온 기록에서 AI 리뷰 요청"""
     if not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
 
-    problem = db.get_solved_problem(problem_id)
+    problem = db.get_solved_problem(platform, problem_ref)
     if not problem:
         raise HTTPException(status_code=404, detail="가져온 기록에서 해당 문제를 찾을 수 없습니다.")
     if not problem.get("code"):
         raise HTTPException(status_code=400, detail="저장된 코드가 없습니다. 세션 쿠키로 다시 가져오기 해주세요.")
 
-    problem_info = {
-        "id": problem_id,
-        "title": problem["title"],
-        "tier": problem["tier"],
-        "tier_name": api_client.TIER_NAMES.get(problem["tier"], "?"),
-        "tags": problem["tags"],
-    }
-    statement = api_client.get_problem_statement(problem_id)
+    if platform == "codeforces":
+        problem_info = api_client.get_codeforces_problem_info(problem_ref)
+        if problem.get("title"):
+            problem_info["title"] = problem["title"]
+        statement = api_client.get_codeforces_problem_statement(problem_ref)
+    else:
+        problem_id = problem["problem_id"]
+        problem_info = {
+            "id": problem_id,
+            "platform": "boj",
+            "problem_ref": str(problem_id),
+            "title": problem["title"],
+            "tier": problem["tier"],
+            "tier_name": problem.get("tier_name") or api_client.TIER_NAMES.get(problem["tier"], "?"),
+            "tags": problem["tags"],
+        }
+        statement = api_client.get_problem_statement(problem_id)
 
     try:
         result = analyzer.analyze_code(problem_info, statement, problem["code"])
@@ -340,9 +435,10 @@ def review_imported(problem_id: int):
         raise HTTPException(status_code=500, detail=f"코드 분석 실패: {e}")
 
     db.save_review(
-        problem_id=problem_id,
+        problem_id=problem_info["id"],
         title=problem["title"],
-        tier=problem["tier"],
+        tier=problem_info["tier"],
+        tier_name=problem_info["tier_name"],
         tags=problem["tags"],
         code=problem["code"],
         feedback=result.get("feedback", ""),
@@ -351,14 +447,19 @@ def review_imported(problem_id: int):
         better_algorithm=result.get("better_algorithm") or "",
         strengths=result.get("strengths", []),
         weaknesses=result.get("weaknesses", []),
+        platform=platform,
+        problem_ref=problem_ref,
     )
     # 리뷰 완료 후 가져온 기록에서 제거 (이중 표시 방지)
-    db.delete_solved_problem(problem_id)
+    db.delete_solved_problem(platform, problem_ref)
 
     return ReviewResponse(
-        problem_id=problem_id,
+        problem_id=problem_info["id"],
+        platform=platform,
+        problem_ref=problem_ref,
+        problem_url=api_client.get_problem_url(platform, problem_ref),
         title=problem["title"],
-        tier=problem["tier"],
+        tier=problem_info["tier"],
         tier_name=problem_info["tier_name"],
         tags=problem["tags"],
         efficiency=result["efficiency"],
@@ -370,9 +471,9 @@ def review_imported(problem_id: int):
     )
 
 
-@app.delete("/api/solved-history/{problem_id}")
-def delete_solved_history(problem_id: int):
-    db.delete_solved_problem(problem_id)
+@app.delete("/api/solved-history/{platform}/{problem_ref}")
+def delete_solved_history(platform: str, problem_ref: str):
+    db.delete_solved_problem(platform, problem_ref)
     return {"ok": True}
 
 
@@ -382,9 +483,9 @@ def clear_solved_history():
     return {"ok": True}
 
 
-@app.get("/api/solved-history/{problem_id}")
-def get_solved_history_detail(problem_id: int):
-    p = db.get_solved_problem(problem_id)
+@app.get("/api/solved-history/{platform}/{problem_ref}")
+def get_solved_history_detail(platform: str, problem_ref: str):
+    p = db.get_solved_problem(platform, problem_ref)
     if not p:
         raise HTTPException(status_code=404, detail="없음")
     return {"code": p.get("code", "")}
