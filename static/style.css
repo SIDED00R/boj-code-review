@@ -305,3 +305,78 @@ textarea { resize: vertical; font-family: 'Consolas', 'Fira Code', monospace; fo
 }
 .alert-error { background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.25); color: var(--red); }
 .alert-info  { background: rgba(108,141,250,.1); border: 1px solid rgba(108,141,250,.2); color: var(--accent); }
+
+/* ── 문제 풀기 모달 ── */
+.pm-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 20px; overflow-y: auto;
+}
+.pm-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); width: 100%; max-width: 1200px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column;
+  min-height: 80vh;
+}
+.pm-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 18px 24px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.pm-header h2 { font-size: 1.1rem; font-weight: 700; flex: 1; }
+.pm-meta { font-size: .8rem; color: var(--text-muted); white-space: nowrap; }
+.pm-close {
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text-muted); width: 32px; height: 32px;
+  border-radius: 6px; cursor: pointer; font-size: 1rem; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; transition: color .2s;
+}
+.pm-close:hover { color: var(--text); }
+.pm-body {
+  display: grid; grid-template-columns: 1fr 1fr; flex: 1;
+  overflow: hidden;
+}
+@media (max-width: 768px) {
+  .pm-body { grid-template-columns: 1fr; }
+}
+.pm-left {
+  padding: 20px; border-right: 1px solid var(--border);
+  overflow-y: auto; max-height: calc(90vh - 70px);
+}
+.pm-right {
+  padding: 20px; display: flex; flex-direction: column; gap: 10px;
+  overflow-y: auto; max-height: calc(90vh - 70px);
+}
+.pm-limits { font-size: .8rem; color: var(--text-muted); margin-bottom: 12px; }
+.pm-text { font-size: .9rem; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.pm-sample { margin-top: 16px; }
+.pm-sample-title { font-size: .78rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.pm-pre {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px; font-family: 'Consolas', monospace;
+  font-size: .85rem; white-space: pre; overflow-x: auto; margin-bottom: 8px;
+}
+.pm-code {
+  flex: 1; min-height: 260px; resize: vertical;
+  font-family: 'Consolas', 'Fira Code', monospace; font-size: .88rem;
+}
+.pm-run-row { display: flex; gap: 10px; align-items: center; }
+
+/* 테스트 케이스 결과 */
+.test-case {
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 8px;
+  border: 1px solid var(--border); font-size: .88rem;
+}
+.test-case.pass { background: rgba(74,222,128,.08); border-color: rgba(74,222,128,.3); }
+.test-case.fail { background: rgba(248,113,113,.08); border-color: rgba(248,113,113,.3); }
+.test-case.pending { background: rgba(108,141,250,.08); border-color: rgba(108,141,250,.2); color: var(--text-muted); }
+.tc-badge { font-weight: 700; margin-right: 8px; }
+.tc-detail { margin-top: 8px; font-size: .82rem; }
+.tc-detail pre { background: var(--surface2); border-radius: 4px; padding: 6px 8px; margin: 3px 0 6px; font-size: .8rem; white-space: pre-wrap; word-break: break-all; }
+.btn-review { background: var(--green); color: #000; }
+.btn-review:hover { opacity: .88; }
+
+/* 추천 문제 카드에서 클릭 커서 */
+.rec-problem-card.cf-clickable { cursor: pointer; transition: background .15s; }
+.rec-problem-card.cf-clickable:hover { background: var(--surface2); }

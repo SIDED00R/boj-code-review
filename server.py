@@ -3,6 +3,8 @@ FastAPI 웹 서버
 """
 import os
 import time
+import subprocess
+import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
@@ -397,6 +399,162 @@ def get_recommendations(platform: str = Query("codeforces")):
         "weak_tags": weak_tags,
         "recommendations": recs,
         "platform": platform,
+    }
+
+
+# ──────────────────────────────────────────────
+# 코드 실행 (live_webcoding의 spawn 방식을 Python subprocess로 포팅)
+# ──────────────────────────────────────────────
+
+class ExecuteRequest(BaseModel):
+    code: str
+    language: str = "python3"
+    stdin: str = ""
+    timeout_sec: int = 5
+
+
+def _run_python(code: str, stdin: str, timeout: int) -> dict:
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    try:
+        r = subprocess.run(
+            ["python3", "-c", code],
+            input=stdin, capture_output=True, text=True,
+            timeout=timeout, env=env,
+        )
+        return {"stdout": r.stdout, "stderr": r.stderr, "exit_code": r.returncode}
+    except subprocess.TimeoutExpired:
+        return {"stdout": "", "stderr": f"[시간 초과 - {timeout}초]", "exit_code": -1}
+    except FileNotFoundError:
+        return {"stdout": "", "stderr": "[Python3를 찾을 수 없습니다]", "exit_code": -1}
+
+
+def _run_cpp(code: str, stdin: str, timeout: int) -> dict:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src = os.path.join(tmpdir, "sol.cpp")
+        exe = os.path.join(tmpdir, "sol")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(code)
+        try:
+            cr = subprocess.run(
+                ["g++", "-O2", "-std=c++17", "-o", exe, src],
+                capture_output=True, text=True, timeout=30,
+            )
+        except FileNotFoundError:
+            return {"stdout": "", "stderr": "[g++를 찾을 수 없습니다]", "exit_code": -1}
+        if cr.returncode != 0:
+            return {"stdout": "", "stderr": cr.stderr, "exit_code": cr.returncode}
+        try:
+            rr = subprocess.run(
+                [exe], input=stdin, capture_output=True, text=True, timeout=timeout,
+            )
+            return {"stdout": rr.stdout, "stderr": rr.stderr, "exit_code": rr.returncode}
+        except subprocess.TimeoutExpired:
+            return {"stdout": "", "stderr": f"[시간 초과 - {timeout}초]", "exit_code": -1}
+
+
+@app.post("/api/execute")
+def execute_code(req: ExecuteRequest):
+    t0 = time.time()
+    lang = req.language.lower()
+    if "python" in lang or "pypy" in lang:
+        result = _run_python(req.code, req.stdin, req.timeout_sec)
+    elif "c++" in lang or "cpp" in lang or "gnu" in lang:
+        result = _run_cpp(req.code, req.stdin, req.timeout_sec)
+    else:
+        raise HTTPException(400, f"지원하지 않는 언어: {req.language}")
+    result["time_ms"] = int((time.time() - t0) * 1000)
+    return result
+
+
+# ──────────────────────────────────────────────
+# CF 문제 가져오기 + 한글 번역
+# ──────────────────────────────────────────────
+
+def _translate_cf_problem(text: str, title: str) -> str:
+    try:
+        from openai import OpenAI as _OpenAI
+        client = _OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    "당신은 프로그래밍 문제 번역 전문가입니다. "
+                    "Codeforces 문제를 한국어로 번역합니다. "
+                    "수식($...$, $$...$$)은 그대로 유지하고, 문제의 의미를 정확하게 전달하세요. "
+                    "번역문만 출력하세요."
+                )},
+                {"role": "user", "content": f"제목: {title}\n\n{text}"},
+            ],
+            max_tokens=2000,
+            temperature=0.3,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"[번역 실패: {e}]\n\n{text}"
+
+
+@app.get("/api/problem/cf/{problem_ref}")
+def get_cf_problem(problem_ref: str):
+    import re
+    import requests as _req
+    from bs4 import BeautifulSoup
+
+    m = re.match(r'^(\d+)([A-Za-z]\d*)$', problem_ref.strip())
+    if not m:
+        raise HTTPException(400, "잘못된 문제 번호 형식 (예: 4A, 1234B)")
+    contest_id, index = m.group(1), m.group(2).upper()
+
+    url = f"https://codeforces.com/problemset/problem/{contest_id}/{index}"
+    try:
+        resp = _req.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(502, f"CF 페이지 로딩 실패: {e}")
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    prob_div = soup.find("div", class_="problem-statement")
+    if not prob_div:
+        raise HTTPException(502, "문제 내용을 찾을 수 없습니다")
+
+    header = prob_div.find("div", class_="header")
+    title_el = header.find("div", class_="title") if header else None
+    title = title_el.get_text(strip=True) if title_el else f"CF {problem_ref}"
+    tl_el = header.find("div", class_="time-limit") if header else None
+    ml_el = header.find("div", class_="memory-limit") if header else None
+    time_limit = tl_el.get_text(strip=True) if tl_el else ""
+    memory_limit = ml_el.get_text(strip=True) if ml_el else ""
+
+    sample_test = prob_div.find("div", class_="sample-test")
+    samples = []
+    if sample_test:
+        inputs = [
+            div.find("pre").get_text("\n", strip=True)
+            for div in sample_test.find_all("div", class_="input") if div.find("pre")
+        ]
+        outputs = [
+            div.find("pre").get_text("\n", strip=True)
+            for div in sample_test.find_all("div", class_="output") if div.find("pre")
+        ]
+        samples = [{"input": i.strip(), "output": o.strip()} for i, o in zip(inputs, outputs)]
+        sample_test.decompose()
+
+    if header:
+        header.decompose()
+
+    statement_text = prob_div.get_text("\n", strip=True)
+    translated = _translate_cf_problem(statement_text, title)
+
+    return {
+        "title": title,
+        "time_limit": time_limit,
+        "memory_limit": memory_limit,
+        "statement_ko": translated,
+        "samples": samples,
+        "url": url,
+        "contest_id": contest_id,
+        "index": index,
     }
 
 

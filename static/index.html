@@ -299,6 +299,45 @@
       <div id="import-history-list"></div>
     </section>
 
+  <!-- ── 문제 풀기 모달 ── -->
+  <div id="problem-modal" class="pm-overlay hidden">
+    <div class="pm-box">
+      <div class="pm-header">
+        <h2 id="pm-title">문제 로딩 중...</h2>
+        <span id="pm-difficulty" class="tier-badge"></span>
+        <span id="pm-meta" class="pm-meta"></span>
+        <button class="pm-close" onclick="closeProblemModal()">✕</button>
+      </div>
+      <div class="pm-body">
+        <!-- 왼쪽: 문제문 -->
+        <div class="pm-left">
+          <div id="pm-loading" class="alert alert-info">
+            <span class="spinner"></span> 문제 불러오는 중...
+          </div>
+          <div id="pm-statement" class="hidden"></div>
+        </div>
+        <!-- 오른쪽: 코드 에디터 + 실행 -->
+        <div class="pm-right">
+          <div class="form-row" style="margin-bottom:8px">
+            <label>언어</label>
+            <select id="pm-language">
+              <option value="python3">Python 3</option>
+              <option value="cpp">C++ (GNU C++17)</option>
+            </select>
+          </div>
+          <textarea id="pm-code" class="pm-code" placeholder="여기에 코드를 작성하세요..." spellcheck="false"></textarea>
+          <div class="pm-run-row">
+            <button id="pm-run-btn" class="btn-primary" onclick="runSamples()">▶ 예제 실행</button>
+            <button id="pm-review-btn" class="btn-primary btn-review hidden" onclick="proceedToReview()">
+              코드 리뷰 진행 →
+            </button>
+          </div>
+          <div id="pm-test-results"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/app.js?v=20260428"></script>
 </body>
 </html>
