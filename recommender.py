@@ -3,7 +3,7 @@
 점수 = 적게 풀수록(0.5) + AI poor 비율(0.3) + 오래 전에 풀수록(0.2)
 """
 from datetime import datetime
-from api_client import search_problems_by_tag, get_tag_key_by_name, TIER_NAMES
+from api_client import search_problems_by_tag, search_cf_problems_by_tag, get_tag_key_by_name, TIER_NAMES
 import db
 
 # 추천 난이도 범위: 평균 티어 기준 -1 ~ +4 (살짝 어려운 문제 추천)
@@ -44,18 +44,21 @@ def _score_tags(tag_data: list) -> list:
     return tag_data
 
 
-def get_weak_tags_scored(top_n: int = 5) -> list[str]:
-    tag_data = db.get_tag_weakness_data()
+def get_weak_tags_scored(top_n: int = 5, platform: str | None = None) -> list[str]:
+    tag_data = db.get_tag_weakness_data(platform=platform)
     scored = _score_tags(tag_data)
     return [d["tag"] for d in scored[:top_n]]
 
 
-def get_recommendations(top_weak_tags: int = 3) -> list[dict]:
+def get_recommendations(top_weak_tags: int = 3, platform: str = "boj") -> list[dict]:
     """
     취약 태그 + 현재 수준 기반 문제 추천
-    반환: [{"tag": ..., "problems": [{id, title, tier, tier_name}]}]
+    반환: [{"tag": ..., "problems": [{id, title, tier, tier_name, url?}]}]
     """
-    weak_tags = get_weak_tags_scored(top_weak_tags)
+    if platform == "codeforces":
+        return _get_cf_recommendations(top_weak_tags)
+
+    weak_tags = get_weak_tags_scored(top_weak_tags, platform="boj")
     if not weak_tags:
         return []
 
@@ -77,12 +80,38 @@ def get_recommendations(top_weak_tags: int = 3) -> list[dict]:
         problems = problems[:MAX_PER_TAG]
 
         if problems:
+            for p in problems:
+                p["url"] = f"https://boj.kr/{p['id']}"
             recommendations.append({
                 "tag": tag_name,
                 "tag_key": tag_key,
                 "problems": problems,
             })
 
+    return recommendations
+
+
+def _get_cf_recommendations(top_weak_tags: int = 3) -> list[dict]:
+    weak_tags = get_weak_tags_scored(top_weak_tags, platform="codeforces")
+    if not weak_tags:
+        return []
+
+    avg_rating = db.get_average_cf_rating()
+    min_rating = max(800, int(avg_rating) - 200)
+    max_rating = min(3500, int(avg_rating) + 400)
+
+    exclude_refs = db.get_solved_cf_refs()
+
+    recommendations = []
+    for tag in weak_tags:
+        problems = search_cf_problems_by_tag(tag, min_rating, max_rating, exclude_refs)
+        problems = problems[:MAX_PER_TAG]
+        if problems:
+            recommendations.append({
+                "tag": tag,
+                "tag_key": tag,
+                "problems": problems,
+            })
     return recommendations
 
 

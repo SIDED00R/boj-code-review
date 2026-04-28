@@ -195,6 +195,25 @@ def init_db():
     cur.execute("UPDATE solved_history SET problem_ref = CAST(problem_id AS TEXT) WHERE problem_ref IS NULL OR problem_ref = ''")
     cur.execute("UPDATE solved_history SET tier_name = '' WHERE tier_name IS NULL")
 
+    # github_settings 테이블 (GitHub OAuth 연결 정보)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS github_settings (
+            id              INTEGER PRIMARY KEY,
+            access_token    TEXT NOT NULL DEFAULT '',
+            github_username TEXT NOT NULL DEFAULT '',
+            target_repo     TEXT NOT NULL DEFAULT '',
+            updated_at      TEXT NOT NULL DEFAULT ''
+        )
+    """ if not USE_POSTGRES else """
+        CREATE TABLE IF NOT EXISTS github_settings (
+            id              SERIAL PRIMARY KEY,
+            access_token    TEXT NOT NULL DEFAULT '',
+            github_username TEXT NOT NULL DEFAULT '',
+            target_repo     TEXT NOT NULL DEFAULT '',
+            updated_at      TEXT NOT NULL DEFAULT ''
+        )
+    """)
+
     conn.commit()
     if USE_POSTGRES:
         cur.close()
@@ -630,20 +649,66 @@ def get_solved_history() -> list:
     return rows
 
 
-def get_tag_weakness_data() -> list:
+def get_average_cf_rating() -> float:
+    """평균 CF 레이팅 (tier_name 'Codeforces NNNN' 파싱, 데이터 없으면 1200.0 반환)"""
+    conn = get_connection()
+    cur = conn.cursor()
+    p = _ph()
+    cur.execute(f"SELECT tier_name FROM reviews WHERE platform = {p}", ("codeforces",))
+    rows = cur.fetchall()
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+
+    ratings = []
+    for row in rows:
+        tn = row[0]
+        if tn and tn.startswith("Codeforces "):
+            try:
+                ratings.append(int(tn.split()[-1]))
+            except ValueError:
+                pass
+    return sum(ratings) / len(ratings) if ratings else 1200.0
+
+
+def get_solved_cf_refs() -> set:
+    """풀었거나 가져온 CF 문제의 problem_ref 집합"""
+    conn = get_connection()
+    cur = conn.cursor()
+    p = _ph()
+    cur.execute(f"SELECT DISTINCT problem_ref FROM reviews WHERE platform = {p}", ("codeforces",))
+    refs = {r[0] for r in cur.fetchall()}
+    try:
+        cur.execute(f"SELECT problem_ref FROM solved_history WHERE platform = {p}", ("codeforces",))
+        refs |= {r[0] for r in cur.fetchall()}
+    except Exception:
+        pass
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+    return refs
+
+
+def get_tag_weakness_data(platform: str | None = None) -> list:
     """
     태그별 취약점 점수 계산용 데이터 반환
-    reviews + solved_history 전부 합산
+    reviews + solved_history 전부 합산 (platform 지정 시 해당 플랫폼만)
     반환: [{tag, solve_count, last_solved_at, poor_ratio}]
     """
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("SELECT tags, created_at FROM reviews")
-    review_rows = _rows_to_dicts(cur, cur.fetchall())
-
-    cur.execute("SELECT tags, imported_at FROM solved_history")
-    solved_rows = _rows_to_dicts(cur, cur.fetchall())
+    if platform:
+        p = _ph()
+        cur.execute(f"SELECT tags, created_at FROM reviews WHERE platform = {p}", (platform,))
+        review_rows = _rows_to_dicts(cur, cur.fetchall())
+        cur.execute(f"SELECT tags, imported_at FROM solved_history WHERE platform = {p}", (platform,))
+        solved_rows = _rows_to_dicts(cur, cur.fetchall())
+    else:
+        cur.execute("SELECT tags, created_at FROM reviews")
+        review_rows = _rows_to_dicts(cur, cur.fetchall())
+        cur.execute("SELECT tags, imported_at FROM solved_history")
+        solved_rows = _rows_to_dicts(cur, cur.fetchall())
 
     cur.execute("SELECT tag, poor_count, total_count FROM tag_stats")
     stat_rows = _rows_to_dicts(cur, cur.fetchall())
@@ -720,3 +785,75 @@ def get_solved_problem_keys() -> set[tuple[str, str]]:
         cur.close()
     conn.close()
     return keys
+
+
+# ──────────────────────────────────────────────
+# GitHub OAuth 설정
+# ──────────────────────────────────────────────
+
+def get_github_settings() -> dict | None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT access_token, github_username, target_repo FROM github_settings WHERE id = 1")
+    rows = _rows_to_dicts(cur, cur.fetchall())
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+    if not rows:
+        return None
+    row = rows[0]
+    if not row.get("access_token"):
+        return None
+    return row
+
+
+def save_github_settings(access_token: str, github_username: str, target_repo: str = ""):
+    conn = get_connection()
+    cur = conn.cursor()
+    p = _ph()
+    now = datetime.now().isoformat()
+    if USE_POSTGRES:
+        cur.execute(f"""
+            INSERT INTO github_settings (id, access_token, github_username, target_repo, updated_at)
+            VALUES (1, {p}, {p}, {p}, {p})
+            ON CONFLICT (id) DO UPDATE
+            SET access_token = EXCLUDED.access_token,
+                github_username = EXCLUDED.github_username,
+                target_repo = CASE WHEN {p} != '' THEN EXCLUDED.target_repo ELSE github_settings.target_repo END,
+                updated_at = EXCLUDED.updated_at
+        """, (access_token, github_username, target_repo, now, target_repo))
+    else:
+        cur.execute(f"""
+            INSERT INTO github_settings (id, access_token, github_username, target_repo, updated_at)
+            VALUES (1, {p}, {p}, {p}, {p})
+            ON CONFLICT(id) DO UPDATE
+            SET access_token = excluded.access_token,
+                github_username = excluded.github_username,
+                target_repo = CASE WHEN {p} != '' THEN excluded.target_repo ELSE github_settings.target_repo END,
+                updated_at = excluded.updated_at
+        """, (access_token, github_username, target_repo, now, target_repo))
+    conn.commit()
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+
+
+def update_github_target_repo(target_repo: str):
+    conn = get_connection()
+    cur = conn.cursor()
+    p = _ph()
+    cur.execute(f"UPDATE github_settings SET target_repo = {p} WHERE id = 1", (target_repo,))
+    conn.commit()
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+
+
+def delete_github_settings():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM github_settings WHERE id = 1")
+    conn.commit()
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()

@@ -3,10 +3,11 @@ FastAPI 웹 서버
 """
 import os
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -25,6 +26,44 @@ STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 db.init_db()
+
+
+# ──────────────────────────────────────────────
+# GitHub push 헬퍼
+# ──────────────────────────────────────────────
+
+def _build_readme(platform: str, problem_ref: str, title: str,
+                  tier_name: str, tags: list, language: str, url: str,
+                  description: str = "", input_desc: str = "", output_desc: str = "") -> str:
+    KST = timezone(timedelta(hours=9))
+    now = datetime.now(KST)
+    date_str = f"{now.year}년 {now.month}월 {now.day}일 {now.strftime('%H:%M:%S')}"
+    tags_str = ", ".join(f"`{t}`" for t in tags) if tags else "없음"
+
+    lines = [
+        f"# [{tier_name}] {title} - {problem_ref}",
+        "",
+        f"[문제 링크]({url})",
+        "",
+        "## 성능 요약",
+        "",
+        "메모리: - KB, 시간: - ms",
+        "",
+        "## 분류",
+        "",
+        tags_str,
+        "",
+        "## 제출 일자",
+        "",
+        date_str,
+    ]
+    if description:
+        lines += ["", "## 문제 설명", "", description]
+    if input_desc:
+        lines += ["", "## 입력", "", input_desc]
+    if output_desc:
+        lines += ["", "## 출력", "", output_desc]
+    return "\n".join(lines) + "\n"
 
 
 # ──────────────────────────────────────────────
@@ -55,6 +94,23 @@ class CodeforcesImportRequest(BaseModel):
     count: int = 200
     api_key: str | None = None
     api_secret: str | None = None
+    github_repo: str | None = None
+    github_token: str | None = None
+
+
+class SetRepoRequest(BaseModel):
+    repo: str
+
+
+class PushReviewRequest(BaseModel):
+    platform: str
+    problem_ref: str
+    title: str
+    tier_name: str
+    tags: list[str] = []
+    code: str
+    language: str = ""
+    url: str = ""
 
 
 class ReviewResponse(BaseModel):
@@ -77,6 +133,86 @@ class ReviewResponse(BaseModel):
 # ──────────────────────────────────────────────
 # API 엔드포인트
 # ──────────────────────────────────────────────
+
+def _github_oauth_settings():
+    client_id = os.environ.get("GITHUB_CLIENT_ID", "")
+    client_secret = os.environ.get("GITHUB_CLIENT_SECRET", "")
+    app_url = os.environ.get("APP_URL", "http://localhost:8080")
+    return client_id, client_secret, app_url
+
+
+# ──────────────────────────────────────────────
+# GitHub OAuth 엔드포인트
+# ──────────────────────────────────────────────
+
+@app.get("/auth/github")
+def github_oauth_start():
+    client_id, _, app_url = _github_oauth_settings()
+    if not client_id:
+        raise HTTPException(status_code=500, detail="GITHUB_CLIENT_ID가 설정되지 않았습니다.")
+    callback_url = f"{app_url}/auth/github/callback"
+    github_url = (
+        f"https://github.com/login/oauth/authorize"
+        f"?client_id={client_id}&scope=repo&redirect_uri={callback_url}"
+    )
+    return RedirectResponse(github_url)
+
+
+@app.get("/auth/github/callback")
+def github_oauth_callback(code: str = "", error: str = ""):
+    client_id, client_secret, app_url = _github_oauth_settings()
+    if error or not code:
+        return RedirectResponse(f"{app_url}/?github=error")
+    try:
+        token = api_client.exchange_github_code(code, client_id, client_secret)
+        user = api_client.get_github_user(token)
+        username = user.get("login", "")
+        db.save_github_settings(access_token=token, github_username=username)
+    except Exception as e:
+        return RedirectResponse(f"{app_url}/?github=error&msg={str(e)[:80]}")
+    return RedirectResponse(f"{app_url}/?github=connected&user={username}")
+
+
+@app.get("/auth/github/status")
+def github_status():
+    settings = db.get_github_settings()
+    if not settings:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "username": settings.get("github_username", ""),
+        "target_repo": settings.get("target_repo", ""),
+    }
+
+
+@app.post("/auth/github/repo")
+def set_github_repo(req: SetRepoRequest):
+    if not db.get_github_settings():
+        raise HTTPException(status_code=400, detail="GitHub 연결 먼저 해주세요.")
+    repo = req.repo.strip()
+    if not repo or "/" not in repo:
+        raise HTTPException(status_code=400, detail="저장소를 owner/repo 형식으로 입력하세요.")
+    db.update_github_target_repo(repo)
+    return {"ok": True, "target_repo": repo}
+
+
+@app.delete("/auth/github")
+def github_disconnect():
+    db.delete_github_settings()
+    return {"ok": True}
+
+
+@app.get("/auth/github/repos")
+def get_github_repos():
+    settings = db.get_github_settings()
+    if not settings:
+        raise HTTPException(status_code=400, detail="GitHub 연결이 필요합니다.")
+    try:
+        repos = api_client.get_github_user_repos(settings["access_token"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"레포지토리 조회 실패: {e}")
+    return {"repos": repos}
+
 
 @app.get("/")
 def index():
@@ -174,6 +310,42 @@ def review_code(req: ReviewRequest):
     )
 
 
+@app.post("/api/push-review")
+def push_review_to_github(req: PushReviewRequest):
+    gh_settings = db.get_github_settings()
+    if not gh_settings:
+        raise HTTPException(status_code=400, detail="GitHub 연결이 필요합니다. 헤더의 '🐙 GitHub 연결' 버튼을 눌러주세요.")
+    github_repo = gh_settings.get("target_repo", "")
+    github_token = gh_settings.get("access_token", "")
+    if not github_repo or not github_token:
+        raise HTTPException(status_code=400, detail="GitHub 저장소를 선택해주세요.")
+
+    ext = api_client._get_file_extension(req.language)
+    url = req.url or api_client.get_problem_url(req.platform, req.problem_ref)
+
+    if req.platform == "boj":
+        tier_cat = req.tier_name.split()[0] if req.tier_name else "Unrated"
+        folder = f"백준/{tier_cat}/{req.problem_ref}번. {req.title}"
+        msg = f"[BOJ] {req.problem_ref}번. {req.title}"
+        sections = api_client.get_boj_problem_sections(int(req.problem_ref))
+    else:
+        folder = f"Codeforces/{req.problem_ref}. {req.title}"
+        msg = f"[Codeforces] {req.problem_ref}. {req.title}"
+        sections = api_client.get_cf_problem_sections(req.problem_ref)
+
+    readme = _build_readme(req.platform, req.problem_ref, req.title,
+                           req.tier_name, req.tags, req.language, url,
+                           sections.get("description", ""),
+                           sections.get("input", ""),
+                           sections.get("output", ""))
+    api_client.push_file_to_github(github_repo, github_token, f"{folder}/README.md", readme, msg)
+    ok = api_client.push_file_to_github(github_repo, github_token,
+                                        f"{folder}/{req.problem_ref}{ext}", req.code, msg)
+    if not ok:
+        raise HTTPException(status_code=500, detail="GitHub push에 실패했습니다.")
+    return {"pushed": True, "repo": github_repo, "path": folder}
+
+
 @app.get("/api/reviews")
 def list_reviews(limit: int = 50):
     return {"reviews": db.get_review_history(limit)}
@@ -198,23 +370,33 @@ def get_review(review_id: int):
 
 
 @app.get("/api/recommend")
-def get_recommendations():
-    avg_tier = db.get_average_tier()
-    weak_tags = recommender.get_weak_tags_scored(5)
+def get_recommendations(platform: str = Query("codeforces")):
+    if platform == "codeforces":
+        avg_rating = db.get_average_cf_rating()
+        avg_tier = 0
+        tier_name = f"CF {int(avg_rating)}" if avg_rating != 1200.0 or db.get_solved_cf_refs() else "N/A"
+        tier_range = f"CF {max(800, int(avg_rating) - 200)} ~ CF {min(3500, int(avg_rating) + 400)}"
+    else:
+        avg_tier = db.get_average_tier()
+        avg_rating = avg_tier
+        tier_name = api_client.TIER_NAMES.get(int(avg_tier), "N/A")
+        tier_range = recommender.tier_range_description(avg_tier)
+
+    weak_tags = recommender.get_weak_tags_scored(5, platform=platform)
 
     if not weak_tags:
-        return {"avg_tier": avg_tier, "tier_name": api_client.TIER_NAMES.get(int(avg_tier), "N/A"),
-                "weak_tags": [], "recommendations": []}
+        return {"avg_tier": avg_tier, "tier_name": tier_name,
+                "weak_tags": [], "recommendations": [], "platform": platform}
 
-    recs = recommender.get_recommendations(top_weak_tags=3)
-    tier_desc = recommender.tier_range_description(avg_tier)
+    recs = recommender.get_recommendations(top_weak_tags=3, platform=platform)
 
     return {
         "avg_tier": avg_tier,
-        "tier_name": api_client.TIER_NAMES.get(int(avg_tier), "N/A"),
-        "tier_range": tier_desc,
+        "tier_name": tier_name,
+        "tier_range": tier_range,
         "weak_tags": weak_tags,
         "recommendations": recs,
+        "platform": platform,
     }
 
 
@@ -313,8 +495,13 @@ def import_history(req: ImportRequest):
     skipped = len(submissions) - len(new_subs)
     imported, failed = 0, []
 
+    gh_settings = db.get_github_settings()
+    github_repo = gh_settings.get("target_repo") if gh_settings else None
+    github_token = gh_settings.get("access_token") if gh_settings else None
+    github_push_enabled = bool(github_repo and github_token)
+    github_pushed = 0
+
     if new_subs:
-        # 문제 정보 한 번에 조회 (bulk)
         new_ids = [s["problem_id"] for s in new_subs]
         info_map = api_client.get_problems_bulk(new_ids)
 
@@ -340,6 +527,20 @@ def import_history(req: ImportRequest):
                 platform="boj",
                 problem_ref=str(problem_id),
             )
+            if github_push_enabled and code:
+                ext = api_client._get_file_extension(sub.get("language", ""))
+                tier_cat = info["tier_name"].split()[0] if info.get("tier_name") else "Unrated"
+                folder = f"백준/{tier_cat}/{problem_id}번. {info['title']}"
+                msg = f"[BOJ] {problem_id}번. {info['title']}"
+                boj_url = f"https://www.acmicpc.net/problem/{problem_id}"
+                readme = _build_readme("boj", str(problem_id), info["title"],
+                                       info.get("tier_name", ""), info.get("tags", []),
+                                       sub.get("language", ""), boj_url)
+                api_client.push_file_to_github(github_repo, github_token,
+                                               f"{folder}/README.md", readme, msg)
+                if api_client.push_file_to_github(github_repo, github_token,
+                                                  f"{folder}/{problem_id}{ext}", code, msg):
+                    github_pushed += 1
             imported += 1
 
     return {
@@ -347,6 +548,8 @@ def import_history(req: ImportRequest):
         "imported": imported,
         "skipped": skipped,
         "failed": failed,
+        "github_pushed": github_pushed,
+        "github_repo": github_repo or "",
     }
 
 
@@ -377,6 +580,13 @@ def import_codeforces_history(req: CodeforcesImportRequest):
     new_subs = [s for s in submissions if ("codeforces", s["problem_ref"]) not in existing_keys]
     skipped = len(submissions) - len(new_subs)
 
+    # GitHub 설정: 수동 입력 우선, 없으면 저장된 OAuth 설정 사용
+    gh_settings = db.get_github_settings()
+    github_repo = (req.github_repo or "").strip() or (gh_settings.get("target_repo") if gh_settings else None)
+    github_token = (req.github_token or "").strip() or (gh_settings.get("access_token") if gh_settings else None)
+    github_push_enabled = bool(github_repo and github_token)
+    github_pushed = 0
+
     for sub in new_subs:
         db.save_solved_problem(
             problem_id=0,
@@ -389,6 +599,20 @@ def import_codeforces_history(req: CodeforcesImportRequest):
             platform="codeforces",
             problem_ref=sub["problem_ref"],
         )
+        if github_push_enabled and sub.get("code"):
+            ext = api_client._get_file_extension(sub.get("language", ""))
+            ref = sub["problem_ref"]
+            folder = f"Codeforces/{ref}. {sub['title']}"
+            msg = f"[Codeforces] {ref}. {sub['title']}"
+            cf_url = sub.get("problem_url", api_client.get_problem_url("codeforces", ref))
+            readme = _build_readme("codeforces", ref, sub["title"],
+                                   sub.get("tier_name", ""), sub.get("tags", []),
+                                   sub.get("language", ""), cf_url)
+            api_client.push_file_to_github(github_repo, github_token,
+                                           f"{folder}/README.md", readme, msg)
+            if api_client.push_file_to_github(github_repo, github_token,
+                                              f"{folder}/{ref}{ext}", sub["code"], msg):
+                github_pushed += 1
 
     return {
         "handle": user.get("handle", handle),
@@ -396,6 +620,8 @@ def import_codeforces_history(req: CodeforcesImportRequest):
         "imported": len(new_subs),
         "skipped": skipped,
         "has_source": any(bool(s.get("code")) for s in submissions),
+        "github_pushed": github_pushed,
+        "github_repo": github_repo or "",
     }
 
 

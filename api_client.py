@@ -1,6 +1,7 @@
 """
 solved.ac API + 백준 페이지 크롤링 모듈
 """
+import base64
 import re
 from functools import lru_cache
 import hashlib
@@ -137,6 +138,60 @@ def get_problem_statement(problem_id: int) -> str:
         return "\n\n".join(parts) if parts else "문제 설명을 가져올 수 없습니다."
     except Exception as e:
         return f"크롤링 실패: {e}"
+
+
+def get_boj_problem_sections(problem_id: int) -> dict:
+    """BOJ 문제 페이지에서 설명/입력/출력 섹션을 각각 반환"""
+    url = f"https://www.acmicpc.net/problem/{problem_id}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        def _text(sel):
+            el = soup.select_one(sel)
+            return el.get_text(separator="\n", strip=True) if el else ""
+        return {
+            "description": _text("#problem_description"),
+            "input": _text("#problem_input"),
+            "output": _text("#problem_output"),
+        }
+    except Exception:
+        return {"description": "", "input": "", "output": ""}
+
+
+def get_cf_problem_sections(problem_ref: str) -> dict:
+    """Codeforces 문제 페이지에서 설명/입력/출력 섹션을 각각 반환"""
+    try:
+        contest_id, index = normalize_codeforces_problem_ref(problem_ref)
+        url = f"https://codeforces.com/problemset/problem/{contest_id}/{index}"
+        resp = requests.get(url, headers=CODEFORCES_HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        stmt = soup.select_one(".problem-statement")
+        if not stmt:
+            return {"description": "", "input": "", "output": ""}
+        def _section(title_text):
+            for h in stmt.select(".section-title"):
+                if title_text.lower() in h.get_text().lower():
+                    parts = []
+                    for sib in h.next_siblings:
+                        if hasattr(sib, 'get') and sib.get('class') and 'section-title' in sib.get('class', []):
+                            break
+                        txt = sib.get_text(separator="\n", strip=True) if hasattr(sib, 'get_text') else str(sib).strip()
+                        if txt:
+                            parts.append(txt)
+                    return "\n".join(parts)
+            return ""
+        # 첫 번째 div (문제 설명)
+        divs = stmt.select("div > div")
+        description = divs[0].get_text(separator="\n", strip=True) if divs else ""
+        return {
+            "description": description,
+            "input": _section("input"),
+            "output": _section("output"),
+        }
+    except Exception:
+        return {"description": "", "input": "", "output": ""}
 
 
 def normalize_codeforces_problem_ref(problem_ref: str) -> tuple[int, str]:
@@ -338,6 +393,51 @@ def search_problems_by_tag(tag_key: str, min_tier: int, max_tier: int,
     return results
 
 
+def search_cf_problems_by_tag(tag: str, min_rating: int, max_rating: int,
+                               exclude_refs: set) -> list[dict]:
+    """CF API로 태그 + 레이팅 범위로 문제 검색"""
+    url = "https://codeforces.com/api/problemset.problems"
+    try:
+        resp = requests.get(url, params={"tags": tag}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "OK":
+            return []
+        problems = data["result"]["problems"]
+        stats_map = {
+            (s["contestId"], s["index"]): s["solvedCount"]
+            for s in data["result"].get("problemStatistics", [])
+        }
+    except Exception:
+        return []
+
+    results = []
+    for p in problems:
+        rating = p.get("rating", 0)
+        if not rating or not (min_rating <= rating <= max_rating):
+            continue
+        contest_id = p.get("contestId")
+        index = p.get("index", "")
+        if not contest_id:
+            continue
+        ref = f"{contest_id}{index}"
+        if ref in exclude_refs:
+            continue
+        results.append({
+            "id": ref,
+            "title": p.get("name", ref),
+            "tier": 0,
+            "tier_name": f"CF {rating}",
+            "url": f"https://codeforces.com/problemset/problem/{contest_id}/{index}",
+            "_solved_count": stats_map.get((contest_id, index), 0),
+        })
+
+    results.sort(key=lambda x: -x["_solved_count"])
+    for r in results:
+        del r["_solved_count"]
+    return results
+
+
 def get_tag_key_by_name(tag_name: str) -> str:
     """
     태그 한국어/영어 이름 → solved.ac 태그 key 변환
@@ -357,6 +457,127 @@ def get_tag_key_by_name(tag_name: str) -> str:
         pass
     # fallback: 이름을 그대로 key로 사용
     return tag_name.lower().replace(" ", "_")
+
+
+def exchange_github_code(code: str, client_id: str, client_secret: str) -> str:
+    """GitHub OAuth code → access token 교환"""
+    resp = requests.post(
+        "https://github.com/login/oauth/access_token",
+        json={"client_id": client_id, "client_secret": client_secret, "code": code},
+        headers={"Accept": "application/json"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    token = data.get("access_token", "")
+    if not token:
+        raise ValueError(data.get("error_description") or "GitHub 토큰 발급 실패")
+    return token
+
+
+def get_github_user(token: str) -> dict:
+    """GitHub 유저 정보 조회"""
+    resp = requests.get(
+        "https://api.github.com/user",
+        headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_github_user_repos(token: str) -> list[dict]:
+    """유저의 GitHub 레포지토리 목록 (최대 100개, 최근 업데이트순)"""
+    repos = []
+    for page in range(1, 4):
+        resp = requests.get(
+            "https://api.github.com/user/repos",
+            params={"per_page": 100, "page": page, "sort": "updated", "affiliation": "owner"},
+            headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        repos.extend({"full_name": r["full_name"], "private": r["private"]} for r in batch)
+    return repos
+
+
+def _get_file_extension(language: str) -> str:
+    lang = (language or "").lower()
+    if "c++" in lang or "c plus" in lang:
+        return ".cpp"
+    if "python" in lang or "pypy" in lang:
+        return ".py"
+    if "java" in lang and "javascript" not in lang:
+        return ".java"
+    if "javascript" in lang or "node" in lang:
+        return ".js"
+    if "kotlin" in lang:
+        return ".kt"
+    if "rust" in lang:
+        return ".rs"
+    if "go" in lang or lang == "go":
+        return ".go"
+    if "ruby" in lang:
+        return ".rb"
+    if "c#" in lang or "csharp" in lang:
+        return ".cs"
+    if lang.startswith("c ") or lang == "c" or "gnu c" in lang and "c++" not in lang:
+        return ".c"
+    if "php" in lang:
+        return ".php"
+    if "haskell" in lang:
+        return ".hs"
+    if "scala" in lang:
+        return ".scala"
+    if "swift" in lang:
+        return ".swift"
+    if "typescript" in lang:
+        return ".ts"
+    if "f#" in lang:
+        return ".fs"
+    if "d " in lang or lang == "d":
+        return ".d"
+    return ".txt"
+
+
+def get_github_file_sha(repo: str, path: str, token: str) -> str | None:
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"token {token}",
+    }
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json().get("sha")
+    except Exception:
+        return None
+
+
+def push_file_to_github(
+    repo: str, token: str, path: str, content: str, commit_message: str
+) -> bool:
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"token {token}",
+    }
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    sha = get_github_file_sha(repo, path, token)
+    body = {"message": commit_message, "content": encoded}
+    if sha:
+        body["sha"] = sha
+    try:
+        resp = requests.put(url, json=body, headers=headers, timeout=15)
+        resp.raise_for_status()
+        return True
+    except Exception:
+        return False
 
 
 def get_baekjoonhub_problems(repo: str, token: str = None) -> list[dict]:

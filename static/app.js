@@ -1,3 +1,67 @@
+/* ── GitHub OAuth 연결 ── */
+async function loadGithubStatus() {
+  try {
+    const res = await fetch('/auth/github/status');
+    const data = await res.json();
+    const connectBtn = document.getElementById('github-connect-btn');
+    const statusBadge = document.getElementById('github-status-badge');
+    const usernameBadge = document.getElementById('github-username-badge');
+    const repoSelect = document.getElementById('github-repo-select');
+
+    if (data.connected) {
+      connectBtn.style.display = 'none';
+      statusBadge.style.display = 'flex';
+      usernameBadge.textContent = `@${data.username}`;
+
+      // 레포지토리 목록 로드
+      try {
+        const repoRes = await fetch('/auth/github/repos');
+        const repoData = await repoRes.json();
+        repoSelect.innerHTML = '<option value="">저장소 선택...</option>' +
+          (repoData.repos || []).map(r =>
+            `<option value="${r.full_name}" ${r.full_name === data.target_repo ? 'selected' : ''}>${r.full_name}${r.private ? ' 🔒' : ''}</option>`
+          ).join('');
+      } catch {}
+
+      repoSelect.addEventListener('change', async () => {
+        const repo = repoSelect.value;
+        if (!repo) return;
+        await fetch('/auth/github/repo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo }),
+        });
+      });
+    } else {
+      connectBtn.style.display = '';
+      statusBadge.style.display = 'none';
+    }
+  } catch {}
+}
+
+document.getElementById('github-connect-btn')?.addEventListener('click', () => {
+  window.location.href = '/auth/github';
+});
+
+document.getElementById('github-disconnect-btn')?.addEventListener('click', async () => {
+  if (!confirm('GitHub 연결을 해제하시겠습니까?')) return;
+  await fetch('/auth/github', { method: 'DELETE' });
+  location.reload();
+});
+
+// URL 파라미터로 OAuth 결과 감지
+(function() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('github') === 'connected') {
+    history.replaceState({}, '', '/');
+  } else if (params.get('github') === 'error') {
+    alert('GitHub 연결에 실패했습니다. 다시 시도해주세요.');
+    history.replaceState({}, '', '/');
+  }
+})();
+
+loadGithubStatus();
+
 /* ── 테마 토글 ── */
 const themeBtn = document.getElementById('theme-toggle');
 const savedTheme = localStorage.getItem('theme') || 'dark';
@@ -268,6 +332,35 @@ reviewBtn.addEventListener('click', async () => {
   }
 });
 
+function detectLanguage(code) {
+  // C++ (가장 흔함 — 넓게 잡음)
+  if (/#include/.test(code) || /\bstd::/.test(code) || /\bcout\b/.test(code) ||
+      /\bcin\b/.test(code) || /\bint\s+main\s*\(/.test(code) || /\bvector\s*</.test(code) ||
+      /\busing\s+namespace\s+std/.test(code)) return 'GNU C++17';
+  // Python
+  if (/\bdef\s+\w/.test(code) || /\bimport\s+\w/.test(code) ||
+      /\bprint\s*\(/.test(code) || /\binput\s*\(/.test(code) ||
+      /\brange\s*\(/.test(code)) return 'Python 3';
+  // Java
+  if (/\bpublic\s+class\b/.test(code) || /\bSystem\.out\b/.test(code) ||
+      /\bScanner\b/.test(code) || /\bBufferedReader\b/.test(code)) return 'Java';
+  // Kotlin
+  if (/\bfun\s+main\b/.test(code) || /\bprintln\b/.test(code) ||
+      /\breadLine\b/.test(code)) return 'Kotlin';
+  // C#
+  if (/\busing\s+System\b/.test(code) || /\bConsole\.\w/.test(code)) return 'C#';
+  // Rust
+  if (/\bfn\s+main\s*\(/.test(code) || /\buse\s+std::io/.test(code) ||
+      /\blet\s+mut\b/.test(code)) return 'Rust';
+  // Go
+  if (/\bpackage\s+main\b/.test(code) || /\bfmt\./.test(code)) return 'Go';
+  // JavaScript / Node
+  if (/\brequire\s*\(/.test(code) || /\bconsole\.log\b/.test(code)) return 'JavaScript';
+  // C (fallback — #include없이 printf/scanf만 있는 경우)
+  if (/\bprintf\s*\(/.test(code) || /\bscanf\s*\(/.test(code)) return 'C';
+  return '';
+}
+
 function renderReview(container, d) {
   const tc = tierClass(d.tier);
   const tagsHtml = d.tags.map(t => `<span class="tag">${t}</span>`).join('');
@@ -319,8 +412,50 @@ function renderReview(container, d) {
         <h4>상세 피드백</h4>
         <div class="markdown-body">${feedbackHtml}</div>
       </div>
+
+      <div style="margin-top:16px;display:flex;align-items:center;gap:10px">
+        <button id="push-github-btn" class="btn-primary" style="font-size:.85rem;padding:7px 16px">
+          🐙 GitHub에 올리기
+        </button>
+        <span id="push-github-msg" style="font-size:.82rem"></span>
+      </div>
     </div>
   `;
+
+  document.getElementById('push-github-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('push-github-btn');
+    const msg = document.getElementById('push-github-msg');
+    const code = document.getElementById('code-input').value.trim();
+    const langSelect = document.getElementById('code-language');
+    const language = (langSelect && langSelect.value) || detectLanguage(code);
+    btn.disabled = true;
+    btn.textContent = '올리는 중...';
+    msg.textContent = '';
+    try {
+      const res = await fetch('/api/push-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform: d.platform,
+          problem_ref: d.problem_ref,
+          title: d.title,
+          tier_name: d.tier_name,
+          tags: d.tags,
+          code,
+          language,
+          url: d.problem_url,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'push 실패');
+      btn.textContent = '✓ 완료';
+      msg.innerHTML = `<span style="color:var(--green)">🐙 <b>${data.repo}</b>에 push 완료</span>`;
+    } catch (e) {
+      btn.textContent = '🐙 GitHub에 올리기';
+      btn.disabled = false;
+      msg.innerHTML = `<span style="color:var(--red)">${e.message}</span>`;
+    }
+  });
 }
 
 /* ── 문제 추천 ── */
@@ -333,7 +468,8 @@ recommendBtn.addEventListener('click', async () => {
   result.innerHTML = '<div class="alert alert-info"><span class="spinner"></span> 추천 문제를 검색 중입니다...</div>';
 
   try {
-    const res = await fetch('/api/recommend');
+    const platform = document.getElementById('recommend-platform')?.value || 'codeforces';
+    const res = await fetch(`/api/recommend?platform=${encodeURIComponent(platform)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || '추천 실패');
     renderRecommend(result, data);
@@ -378,7 +514,7 @@ function renderRecommend(container, data) {
       const ptc = tierClass(p.tier);
       html += `
         <div class="rec-problem-card">
-          <a href="https://boj.kr/${p.id}" target="_blank">${p.id}. ${p.title}</a>
+          <a href="${p.url || 'https://boj.kr/' + p.id}" target="_blank">${p.id}. ${p.title}</a>
           <span class="tier-badge ${ptc}">${p.tier_name}</span>
         </div>`;
     }
@@ -773,10 +909,13 @@ importBtn.addEventListener('click', async () => {
     const failMsg = data.failed && data.failed.length > 0
       ? `<br><span style="color:var(--text-muted);font-size:.82rem">정보 조회 실패: ${data.failed.join(', ')}</span>`
       : '';
+    const bojGithubMsg = (data.github_pushed > 0)
+      ? `<br><span style="color:var(--green);font-size:.82rem">🐙 GitHub <b>${data.github_repo}</b>에 <b>${data.github_pushed}</b>개 push 완료 (BOJ/ 폴더)</span>`
+      : '';
     result.innerHTML = `
       <div class="alert alert-info" style="color:var(--green)">
         ✅ 완료! 총 <b>${data.total_found}</b>개 발견 →
-        <b>${data.imported}</b>개 새로 저장, <b>${data.skipped}</b>개 이미 있음${failMsg}
+        <b>${data.imported}</b>개 새로 저장, <b>${data.skipped}</b>개 이미 있음${failMsg}${bojGithubMsg}
       </div>`;
     loadImportedHistory();
   } catch (e) {
@@ -801,6 +940,9 @@ if (cfImportBtn) {
     setLoading(cfImportBtn, true);
     result.innerHTML = '<div class="alert alert-info"><span class="spinner"></span> Codeforces 제출 기록을 가져오는 중입니다...</div>';
 
+    const ghRepo = (document.getElementById('cf-gh-repo')?.value || '').trim();
+    const ghToken = (document.getElementById('cf-gh-token')?.value || '').trim();
+
     try {
       const res = await fetch('/api/import-codeforces', {
         method: 'POST',
@@ -810,6 +952,8 @@ if (cfImportBtn) {
           count,
           api_key: apiKey || null,
           api_secret: apiSecret || null,
+          github_repo: ghRepo || null,
+          github_token: ghToken || null,
         }),
       });
       const data = await res.json();
@@ -819,11 +963,15 @@ if (cfImportBtn) {
         ? '<br><span style="color:var(--text-muted);font-size:.82rem">소스 코드 포함 항목이 있어 AI 리뷰까지 바로 이어갈 수 있습니다.</span>'
         : '<br><span style="color:var(--text-muted);font-size:.82rem">현재는 코드 없이 기록만 가져왔습니다. API Key/Secret을 넣으면 본인 계정 소스 코드도 함께 가져올 수 있습니다.</span>';
 
+      const githubMsg = (data.github_pushed > 0)
+        ? `<br><span style="color:var(--green);font-size:.82rem">🐙 GitHub <b>${data.github_repo}</b>에 <b>${data.github_pushed}</b>개 push 완료 (Codeforces/ 폴더)</span>`
+        : '';
+
       result.innerHTML = `
         <div class="alert alert-info" style="color:var(--green)">
           ✅ 완료! <b>${data.handle}</b>의 Codeforces 기록 <b>${data.total_found}</b>개 확인 →
           <b>${data.imported}</b>개 새로 저장, <b>${data.skipped}</b>개 이미 있음
-          ${sourceMsg}
+          ${sourceMsg}${githubMsg}
         </div>`;
       loadImportedHistory();
     } catch (e) {
