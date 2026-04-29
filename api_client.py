@@ -159,36 +159,74 @@ def get_boj_problem_sections(problem_id: int) -> dict:
         return {"description": "", "input": "", "output": ""}
 
 
-def get_cf_problem_sections(problem_ref: str) -> dict:
-    """Codeforces 문제 페이지에서 설명/입력/출력 섹션을 각각 반환"""
+def get_cf_problem_sections(problem_ref: str, translate: bool = False) -> dict:
+    """Codeforces 문제 페이지에서 설명/입력/출력 섹션을 XPath로 추출. translate=True일 때만 한국어 번역."""
     try:
+        from lxml import etree
+
         contest_id, index = normalize_codeforces_problem_ref(problem_ref)
         url = f"https://codeforces.com/problemset/problem/{contest_id}/{index}"
         resp = requests.get(url, headers=CODEFORCES_HEADERS, timeout=15)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        stmt = soup.select_one(".problem-statement")
-        if not stmt:
-            return {"description": "", "input": "", "output": ""}
-        def _section(title_text):
-            for h in stmt.select(".section-title"):
-                if title_text.lower() in h.get_text().lower():
-                    parts = []
-                    for sib in h.next_siblings:
-                        if hasattr(sib, 'get') and sib.get('class') and 'section-title' in sib.get('class', []):
-                            break
-                        txt = sib.get_text(separator="\n", strip=True) if hasattr(sib, 'get_text') else str(sib).strip()
-                        if txt:
-                            parts.append(txt)
-                    return "\n".join(parts)
-            return ""
-        # 첫 번째 div (문제 설명)
-        divs = stmt.select("div > div")
-        description = divs[0].get_text(separator="\n", strip=True) if divs else ""
+
+        tree = etree.fromstring(resp.text.encode(), etree.HTMLParser())
+        BASE = '//*[@id="pageContent"]/div[3]/div[2]/div'
+
+        def _xtext(expr: str) -> str:
+            nodes = tree.xpath(expr)
+            if not nodes:
+                return ""
+            el = nodes[0]
+            for st in el.xpath('.//*[contains(@class,"section-title")]'):
+                p = st.getparent()
+                if p is not None:
+                    p.remove(st)
+            return " ".join(el.itertext()).strip()
+
+        raw = {
+            "description": _xtext(f'{BASE}/div[2]'),
+            "input":       _xtext(f'{BASE}/div[3]'),
+            "output":      _xtext(f'{BASE}/div[4]'),
+        }
+
+        if not translate:
+            return raw
+
+        from openai import OpenAI as _OAI
+        import os
+
+        title_nodes = tree.xpath('//div[contains(@class,"title")]')
+        title = " ".join(title_nodes[0].itertext()).strip() if title_nodes else problem_ref
+
+        def _translate(text: str) -> str:
+            if not text:
+                return ""
+            try:
+                client = _OAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": (
+                            "You are a competitive programming translator. "
+                            "Translate the given text to natural Korean. "
+                            "Keep all mathematical formulas, variable names, numbers, and constraints exactly as written. "
+                            "Do NOT add any section headers or labels. "
+                            "Return the translated text only."
+                        )},
+                        {"role": "user", "content": f"Problem: {title}\n\nTranslate:\n\n{text}"},
+                    ],
+                    max_tokens=2000,
+                    temperature=0.3,
+                )
+                result = res.choices[0].message.content.strip()
+                return result if result else text
+            except Exception:
+                return text
+
         return {
-            "description": description,
-            "input": _section("input"),
-            "output": _section("output"),
+            "description": _translate(raw["description"]),
+            "input":       _translate(raw["input"]),
+            "output":      _translate(raw["output"]),
         }
     except Exception:
         return {"description": "", "input": "", "output": ""}

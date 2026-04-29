@@ -1,0 +1,77 @@
+/* 문제 추천 탭 — 추천 API 호출 및 결과 렌더링만 담당 */
+
+const recommendBtn = document.getElementById('recommend-btn');
+recommendBtn.dataset.label = '추천받기';
+
+recommendBtn.addEventListener('click', async () => {
+  const result = document.getElementById('recommend-result');
+  setLoading(recommendBtn, true);
+  result.innerHTML = '<div class="alert alert-info"><span class="spinner"></span> 추천 문제를 검색 중입니다...</div>';
+
+  try {
+    const platform = document.getElementById('recommend-platform')?.value || 'codeforces';
+    const res = await fetch(`/api/recommend?platform=${encodeURIComponent(platform)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '추천 실패');
+    renderRecommend(result, data);
+  } catch (e) {
+    showError(result, e.message);
+  } finally {
+    setLoading(recommendBtn, false);
+  }
+});
+
+function renderRecommend(container, data) {
+  if (!data.recommendations || data.recommendations.length === 0) {
+    container.innerHTML = `
+      <div class="alert alert-info">
+        아직 추천 데이터가 없습니다. 먼저 코드 리뷰를 몇 개 진행해보세요.
+      </div>`;
+    return;
+  }
+
+  const tc = tierClass(Math.floor(data.avg_tier));
+  let html = `
+    <div class="result-card">
+      <div class="summary-grid">
+        <div class="summary-item">
+          <div class="summary-label">현재 평균 레벨 <span style="font-size:.75rem;color:var(--text-muted)">(최근 30개)</span></div>
+          <div class="summary-value"><span class="tier-badge ${tc}">${data.tier_name}</span></div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">추천 난이도 범위</div>
+          <div class="summary-value" style="font-size:.9rem">${data.tier_range || '-'}</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">취약 태그</div>
+          <div class="summary-value" style="font-size:.82rem">${(data.weak_tags || []).join(', ')}</div>
+        </div>
+      </div>
+  `;
+
+  for (const rec of data.recommendations) {
+    html += `<div class="rec-tag-title">📌 ${rec.tag}</div><div class="rec-problems">`;
+    for (const p of rec.problems) {
+      const ptc = tierClass(p.tier);
+      const isCF = p.url && p.url.includes('codeforces');
+      if (isCF) {
+        const safeTitle = p.title.replace(/'/g, "\\'");
+        const safeTier = p.tier_name.replace(/'/g, "\\'");
+        html += `
+          <div class="rec-problem-card cf-clickable" onclick="openProblemModal('${p.id}', '${safeTitle}', '${safeTier}')">
+            <span>${p.id}. ${p.title}</span>
+            <span class="tier-badge ${ptc}">${p.tier_name}</span>
+          </div>`;
+      } else {
+        html += `
+          <div class="rec-problem-card">
+            <a href="${p.url || 'https://boj.kr/' + p.id}" target="_blank">${p.id}. ${p.title}</a>
+            <span class="tier-badge ${ptc}">${p.tier_name}</span>
+          </div>`;
+      }
+    }
+    html += `</div>`;
+  }
+  html += `</div>`;
+  container.innerHTML = html;
+}

@@ -326,6 +326,13 @@ textarea { resize: vertical; font-family: 'Consolas', 'Fira Code', monospace; fo
 }
 .pm-header h2 { font-size: 1.1rem; font-weight: 700; flex: 1; }
 .pm-meta { font-size: .8rem; color: var(--text-muted); white-space: nowrap; }
+.pm-link a {
+  font-size: .8rem;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(108,141,250,.45);
+}
+.pm-link a:hover { opacity: .85; }
 .pm-close {
   background: var(--surface2); border: 1px solid var(--border);
   color: var(--text-muted); width: 32px; height: 32px;
@@ -350,6 +357,21 @@ textarea { resize: vertical; font-family: 'Consolas', 'Fira Code', monospace; fo
 }
 .pm-limits { font-size: .8rem; color: var(--text-muted); margin-bottom: 12px; }
 .pm-text { font-size: .9rem; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.pm-section-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.pm-section-card h3 {
+  font-size: .86rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
 .pm-sample { margin-top: 16px; }
 .pm-sample-title { font-size: .78rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
 .pm-pre {
@@ -357,10 +379,27 @@ textarea { resize: vertical; font-family: 'Consolas', 'Fira Code', monospace; fo
   border-radius: 6px; padding: 10px 12px; font-family: 'Consolas', monospace;
   font-size: .85rem; white-space: pre; overflow-x: auto; margin-bottom: 8px;
 }
-.pm-code {
-  flex: 1; min-height: 260px; resize: vertical;
-  font-family: 'Consolas', 'Fira Code', monospace; font-size: .88rem;
+.cm-wrap { border-radius: 8px; overflow: hidden; }
+.cm-wrap .CodeMirror {
+  min-height: 320px; height: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+  font-size: 13.5px; font-family: 'Fira Code', Consolas, monospace;
 }
+.cm-wrap .CodeMirror-scroll { min-height: 320px; }
+.cm-wrap:focus-within .CodeMirror { border-color: var(--accent); }
+
+.pm-code {
+  flex: 1; min-height: 260px;
+  display: flex; flex-direction: column;
+  overflow: hidden; border-radius: 8px;
+}
+.pm-code .CodeMirror {
+  flex: 1; min-height: 260px; height: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+  font-size: 13.5px; font-family: 'Fira Code', Consolas, monospace;
+}
+.pm-code .CodeMirror-scroll { min-height: 260px; }
+.pm-code:focus-within .CodeMirror { border-color: var(--accent); }
 .pm-run-row { display: flex; gap: 10px; align-items: center; }
 
 /* 테스트 케이스 결과 */

@@ -1,0 +1,37 @@
+import db
+import api_client
+import recommender
+from fastapi import APIRouter, Query
+
+router = APIRouter()
+
+
+@router.get("/api/recommend")
+def get_recommendations(platform: str = Query("codeforces")):
+    if platform == "codeforces":
+        avg_rating = db.get_average_cf_rating()
+        avg_tier = 0
+        tier_name = f"CF {int(avg_rating)}" if avg_rating != 1200.0 or db.get_solved_cf_refs() else "N/A"
+        tier_range = f"CF {max(800, int(avg_rating) - 200)} ~ CF {min(3500, int(avg_rating) + 400)}"
+    else:
+        avg_tier = db.get_average_tier()
+        avg_rating = avg_tier
+        tier_name = api_client.TIER_NAMES.get(int(avg_tier), "N/A")
+        tier_range = recommender.tier_range_description(avg_tier)
+
+    weak_tags = recommender.get_weak_tags_scored(5, platform=platform)
+
+    if not weak_tags:
+        return {"avg_tier": avg_tier, "tier_name": tier_name,
+                "weak_tags": [], "recommendations": [], "platform": platform}
+
+    recs = recommender.get_recommendations(top_weak_tags=3, platform=platform)
+
+    return {
+        "avg_tier": avg_tier,
+        "tier_name": tier_name,
+        "tier_range": tier_range,
+        "weak_tags": weak_tags,
+        "recommendations": recs,
+        "platform": platform,
+    }

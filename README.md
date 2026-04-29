@@ -125,6 +125,46 @@ DB_SOCKET=/cloudsql/PROJECT:REGION:INSTANCE
 
 Cloud Run 배포 시 Cloud SQL 연결도 함께 설정해야 합니다.
 
+## 프로젝트 구조
+
+```
+.
+├── server.py                  # FastAPI 앱 진입점 (라우터 등록만)
+├── db.py                      # DB 초기화 / 쿼리
+├── api_client.py              # 외부 API 클라이언트 (BOJ, Codeforces, OpenAI)
+├── routes/
+│   ├── models.py              # Pydantic 요청/응답 모델
+│   ├── helpers.py             # 공유 헬퍼 (build_readme 등)
+│   ├── auth.py                # GitHub OAuth
+│   ├── review.py              # 코드 리뷰 & GitHub push
+│   ├── problem.py             # CF 문제 조회 & 번역
+│   ├── execute.py             # 코드 실행 (Python / C++)
+│   ├── recommend.py           # 문제 추천
+│   ├── history.py             # 리뷰 기록 조회
+│   ├── solved.py              # import된 제출 기록 관리
+│   ├── import_routes.py       # GitHub / BOJ / CF import
+│   └── stats.py               # 통계 & 종합 리포트
+└── static/
+    ├── index.html
+    ├── style.css
+    └── js/
+        ├── utils.js           # 공유 유틸 (tierClass, effLabel 등)
+        ├── editor.js          # CodeMirror 에디터 초기화
+        ├── theme.js           # 다크/라이트 모드
+        ├── tabs.js            # 탭 전환
+        ├── github.js          # GitHub 연결 UI
+        ├── tier-chart.js      # 티어 변화 차트
+        ├── review.js          # 코드 리뷰 탭
+        ├── recommend.js       # 문제 추천 탭
+        ├── problem-modal.js   # CF 문제 뷰어 모달
+        ├── stats.js           # 풀이 통계 탭
+        ├── history.js         # 리뷰 기록 탭
+        ├── import.js          # 기록 import 탭
+        └── report.js          # 종합 리포트 탭
+```
+
+> 각 파일은 단일 기능만 담당합니다 (Single Responsibility Principle).
+
 ## 기술 스택
 
 - Backend: FastAPI + Uvicorn

@@ -1,4 +1,4 @@
-/* ── GitHub OAuth 연결 ── */
+﻿/* ── GitHub OAuth 연결 ── */
 async function loadGithubStatus() {
   try {
     const res = await fetch('/auth/github/status');
@@ -302,7 +302,7 @@ reviewBtn.addEventListener('click', async () => {
   const platform = platformSelect?.value || 'boj';
   const problemId = document.getElementById('problem-id').value.trim();
   const problemStatement = document.getElementById('problem-statement').value.trim();
-  const code = document.getElementById('code-input').value.trim();
+  const code = window.getEditorValue('code-input').trim();
   const result = document.getElementById('review-result');
 
   if (!problemId) { showError(result, '문제 번호를 입력하세요.'); return; }
@@ -425,7 +425,7 @@ function renderReview(container, d) {
   document.getElementById('push-github-btn').addEventListener('click', async () => {
     const btn = document.getElementById('push-github-btn');
     const msg = document.getElementById('push-github-msg');
-    const code = document.getElementById('code-input').value.trim();
+    const code = window.getEditorValue('code-input').trim();
     const langSelect = document.getElementById('code-language');
     const language = (langSelect && langSelect.value) || detectLanguage(code);
     btn.disabled = true;
@@ -444,6 +444,12 @@ function renderReview(container, d) {
           code,
           language,
           url: d.problem_url,
+          // CF는 이미 번역된 섹션을 그대로 넘겨 재크롤링 방지
+          ...(d.platform === 'codeforces' && _currentProblem?.ref === d.problem_ref ? {
+            description: _currentProblem.sections?.statement || '',
+            input_desc:  _currentProblem.sections?.input     || '',
+            output_desc: _currentProblem.sections?.output    || '',
+          } : {}),
         }),
       });
       const data = await res.json();
@@ -550,24 +556,34 @@ async function openProblemModal(ref, title, tierName) {
   document.getElementById('pm-title').textContent = title;
   document.getElementById('pm-difficulty').textContent = tierName;
   document.getElementById('pm-meta').textContent = '';
+  document.getElementById('pm-link').innerHTML = '';
   document.getElementById('pm-loading').classList.remove('hidden');
   document.getElementById('pm-loading').innerHTML = '<span class="spinner"></span> 문제 불러오는 중...';
   document.getElementById('pm-statement').classList.add('hidden');
   document.getElementById('pm-statement').innerHTML = '';
   document.getElementById('pm-test-results').innerHTML = '';
   document.getElementById('pm-review-btn').classList.add('hidden');
-  document.getElementById('pm-code').value = '';
+  window.setEditorValue('pm-code', '');
 
   try {
     const res = await fetch(`/api/problem/cf/${ref}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || '문제 로딩 실패');
 
-    _currentProblem.samples = data.samples;
-    _currentProblem.title = data.title;
+    _currentProblem.samples  = data.samples;
+    _currentProblem.title    = data.title;
+    _currentProblem.sections = data.statement_sections_ko || {};
 
     document.getElementById('pm-title').textContent = data.title;
     document.getElementById('pm-meta').textContent = `${data.time_limit} · ${data.memory_limit}`;
+    const urlMatch = String(ref).match(/^(\d+)([A-Za-z]\d*)$/);
+    const fallbackUrl = urlMatch
+      ? `https://codeforces.com/problemset/problem/${urlMatch[1]}/${urlMatch[2].toUpperCase()}`
+      : '';
+    const problemUrl = data.url || fallbackUrl;
+    document.getElementById('pm-link').innerHTML = problemUrl
+      ? `<a href="${escapeHtml(problemUrl)}" target="_blank" rel="noopener noreferrer">문제 링크 열기</a>`
+      : '';
     document.getElementById('pm-loading').classList.add('hidden');
 
     const samplesHtml = data.samples.map((s, i) => `
@@ -578,10 +594,24 @@ async function openProblemModal(ref, title, tierName) {
         <pre class="pm-pre">${escapeHtml(s.output)}</pre>
       </div>`).join('');
 
+    const sections = data.statement_sections_ko || {};
+    const sectionDefs = [
+      { key: 'statement', label: '문제' },
+      { key: 'input',     label: '입력' },
+      { key: 'output',    label: '출력' },
+      { key: 'note',      label: '노트' },
+    ];
+    const sectionsHtml = sectionDefs
+      .filter(({ key }) => sections[key])
+      .map(({ key, label }) => `
+        <div class="pm-section-card">
+          <h3>${label}</h3>
+          <div class="pm-text">${escapeHtml(sections[key]).replace(/\n/g, '<br>')}</div>
+        </div>`)
+      .join('');
+
     const stmtEl = document.getElementById('pm-statement');
-    stmtEl.innerHTML = `
-      <div class="pm-text">${escapeHtml(data.statement_ko).replace(/\n/g, '<br>')}</div>
-      ${samplesHtml}`;
+    stmtEl.innerHTML = sectionsHtml + samplesHtml;
     stmtEl.classList.remove('hidden');
   } catch (e) {
     document.getElementById('pm-loading').innerHTML =
@@ -600,7 +630,7 @@ async function runSamples() {
     return;
   }
 
-  const code = document.getElementById('pm-code').value.trim();
+  const code = window.getEditorValue('pm-code').trim();
   if (!code) {
     document.getElementById('pm-test-results').innerHTML =
       '<div class="alert alert-info">코드를 먼저 작성해주세요.</div>';
@@ -672,7 +702,7 @@ function proceedToReview() {
     document.getElementById('problem-platform').dispatchEvent(new Event('change'));
 
   document.getElementById('problem-id').value = _currentProblem.ref;
-  document.getElementById('code-input').value = document.getElementById('pm-code').value;
+  window.setEditorValue('code-input', window.getEditorValue('pm-code'));
 
   const lang = document.getElementById('pm-language').value;
   document.getElementById('code-language').value = lang === 'cpp' ? 'GNU C++17' : 'Python 3';
@@ -903,13 +933,13 @@ function renderProblemList(container, problems) {
           제출 ${p.submission_count}회 · ${p.last_submitted.slice(0,10)}
         </span>
       </div>`;
-    div.addEventListener('click', () => openProblemModal(div.dataset.platform, div.dataset.problemRef));
+    div.addEventListener('click', () => openReviewModal(div.dataset.platform, div.dataset.problemRef));
     frag.appendChild(div);
   });
   container.appendChild(frag);
 }
 
-async function openProblemModal(platform, problemRef) {
+async function openReviewModal(platform, problemRef) {
   const modal = document.getElementById('review-modal');
   const content = document.getElementById('modal-content');
   modal.classList.remove('hidden');
@@ -1420,3 +1450,4 @@ reportBtn.addEventListener('click', async () => {
     setLoading(reportBtn, false);
   }
 });
+
