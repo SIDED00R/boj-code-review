@@ -128,6 +128,10 @@
       <div class="card">
         <h2>풀이 통계</h2>
         <p class="desc">태그별 강점 / 취약점 누적 현황입니다.</p>
+        <div class="platform-toggle" style="margin-bottom:14px">
+          <button id="stats-platform-boj" class="btn-toggle active" data-platform="boj">백준</button>
+          <button id="stats-platform-cf" class="btn-toggle" data-platform="codeforces">Codeforces</button>
+        </div>
         <button id="stats-btn" class="btn-primary">통계 불러오기</button>
       </div>
       <div id="stats-result"></div>
@@ -332,10 +336,14 @@
           <div id="pm-code" class="pm-code"></div>
           <div class="pm-run-row">
             <button id="pm-run-btn" class="btn-primary" onclick="runSamples()">▶ 예제 실행</button>
+            <button id="pm-cf-submit-btn" class="btn-primary" onclick="submitToCF()" style="background:var(--accent2,#e06c00)">
+              CF 제출
+            </button>
             <button id="pm-review-btn" class="btn-primary btn-review hidden" onclick="proceedToReview()">
               코드 리뷰 진행 →
             </button>
           </div>
+          <div id="pm-cf-submit-result"></div>
           <div id="pm-test-results"></div>
         </div>
       </div>
@@ -363,6 +371,7 @@
   <script src="/static/js/review.js?v=20260430"></script>
   <script src="/static/js/recommend.js?v=20260430"></script>
   <script src="/static/js/problem-modal.js?v=20260430"></script>
+  <script src="/static/js/cf-submit.js?v=20260430"></script>
   <script src="/static/js/stats.js?v=20260430"></script>
   <script src="/static/js/history.js?v=20260430"></script>
   <script src="/static/js/import.js?v=20260430"></script>

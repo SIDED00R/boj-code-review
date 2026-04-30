@@ -100,7 +100,7 @@ async def get_cf_problem(problem_ref: str):
         full_text = " ".join(el.itertext()).strip()
         return full_text.replace(prop_text, "", 1).strip()
 
-    title = _xpath_text('//div[contains(@class,"title")]') or f"CF {problem_ref}"
+    title = _xpath_text('//div[@class="title"]') or f"CF {problem_ref}"
     time_limit   = _limit_value('//div[contains(@class,"time-limit")]')
     memory_limit = _limit_value('//div[contains(@class,"memory-limit")]')
 

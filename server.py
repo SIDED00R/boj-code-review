@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import db
-from routes import auth, review, problem, execute, recommend, history, solved, import_routes, stats
+from routes import auth, review, problem, execute, recommend, history, solved, import_routes, stats, cf_submit
 
 app = FastAPI(title="알고리즘 코드 리뷰 & 문제 추천")
 
@@ -29,6 +29,7 @@ app.include_router(history.router)
 app.include_router(solved.router)
 app.include_router(import_routes.router)
 app.include_router(stats.router)
+app.include_router(cf_submit.router)
 
 
 @app.get("/")

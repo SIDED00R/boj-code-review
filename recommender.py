@@ -6,11 +6,14 @@ from datetime import datetime
 from api_client import search_problems_by_tag, search_cf_problems_by_tag, get_tag_key_by_name, TIER_NAMES
 import db
 
-# 추천 난이도 범위: 평균 티어 기준 -1 ~ +4 (살짝 어려운 문제 추천)
-TIER_RANGE_LOW  = 1
-TIER_RANGE_HIGH = 4
-# 태그당 최대 추천 문제 수
-MAX_PER_TAG = 3
+# 현재 수준: avg-1 ~ avg+2 / 도전 수준: avg+3 ~ avg+8
+TIER_RANGE_LOW       = 1   # 현재 수준 하한 오프셋
+TIER_RANGE_SAME_HIGH = 2   # 현재 수준 상한 오프셋
+TIER_RANGE_HARD_LOW  = 3   # 도전 수준 하한 오프셋
+TIER_RANGE_HARD_HIGH = 8   # 도전 수준 상한 오프셋
+# 현재 수준 1문제 + 도전 수준 2문제
+SAME_PER_TAG = 1
+HARD_PER_TAG = 2
 
 
 def _score_tags(tag_data: list) -> list:
@@ -63,21 +66,26 @@ def get_recommendations(top_weak_tags: int = 3, platform: str = "boj") -> list[d
         return []
 
     avg_tier = db.get_average_tier()
-    min_tier = max(1, int(avg_tier) - TIER_RANGE_LOW)
-    max_tier = min(30, int(avg_tier) + TIER_RANGE_HIGH)
+    same_min = max(1,  int(avg_tier) - TIER_RANGE_LOW)
+    same_max = min(30, int(avg_tier) + TIER_RANGE_SAME_HIGH)
+    hard_min = min(30, int(avg_tier) + TIER_RANGE_HARD_LOW)
+    hard_max = min(30, int(avg_tier) + TIER_RANGE_HARD_HIGH)
 
     solved_ids = db.get_solved_problem_ids()
 
     recommendations = []
     for tag_name in weak_tags:
         tag_key = get_tag_key_by_name(tag_name)
-        problems = search_problems_by_tag(
-            tag_key=tag_key,
-            min_tier=min_tier,
-            max_tier=max_tier,
-            exclude_ids=solved_ids,
-        )
-        problems = problems[:MAX_PER_TAG]
+
+        same_problems = search_problems_by_tag(
+            tag_key=tag_key, min_tier=same_min, max_tier=same_max, exclude_ids=solved_ids,
+        )[:SAME_PER_TAG]
+
+        hard_problems = search_problems_by_tag(
+            tag_key=tag_key, min_tier=hard_min, max_tier=hard_max, exclude_ids=solved_ids,
+        )[:HARD_PER_TAG]
+
+        problems = same_problems + hard_problems
 
         if problems:
             for p in problems:
@@ -97,15 +105,18 @@ def _get_cf_recommendations(top_weak_tags: int = 3) -> list[dict]:
         return []
 
     avg_rating = db.get_average_cf_rating()
-    min_rating = max(800, int(avg_rating) - 200)
-    max_rating = min(3500, int(avg_rating) + 400)
+    cf_same_min = max(800,  int(avg_rating) - 200)
+    cf_same_max = min(3500, int(avg_rating) + 100)
+    cf_hard_min = min(3500, int(avg_rating) + 200)
+    cf_hard_max = min(3500, int(avg_rating) + 700)
 
     exclude_refs = db.get_solved_cf_refs()
 
     recommendations = []
     for tag in weak_tags:
-        problems = search_cf_problems_by_tag(tag, min_rating, max_rating, exclude_refs)
-        problems = problems[:MAX_PER_TAG]
+        same_problems = search_cf_problems_by_tag(tag, cf_same_min, cf_same_max, exclude_refs)[:SAME_PER_TAG]
+        hard_problems = search_cf_problems_by_tag(tag, cf_hard_min, cf_hard_max, exclude_refs)[:HARD_PER_TAG]
+        problems = same_problems + hard_problems
         if problems:
             recommendations.append({
                 "tag": tag,
@@ -116,6 +127,6 @@ def _get_cf_recommendations(top_weak_tags: int = 3) -> list[dict]:
 
 
 def tier_range_description(avg_tier: float) -> str:
-    min_tier = max(1, int(avg_tier) - TIER_RANGE_LOW)
-    max_tier = min(30, int(avg_tier) + TIER_RANGE_HIGH)
-    return f"{TIER_NAMES.get(min_tier, '?')} ~ {TIER_NAMES.get(max_tier, '?')}"
+    same_min = max(1,  int(avg_tier) - TIER_RANGE_LOW)
+    hard_max = min(30, int(avg_tier) + TIER_RANGE_HARD_HIGH)
+    return f"{TIER_NAMES.get(same_min, '?')} ~ {TIER_NAMES.get(hard_max, '?')}"

@@ -339,6 +339,48 @@ def get_tag_stats() -> list:
     return rows
 
 
+def get_total_review_count(platform: str | None = None) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    p = _ph()
+    if platform:
+        cur.execute(f"SELECT COUNT(*) FROM reviews WHERE platform = {p}", (platform,))
+    else:
+        cur.execute("SELECT COUNT(*) FROM reviews")
+    count = cur.fetchone()[0]
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+    return count
+
+
+def get_cf_tag_stats() -> list:
+    """CF 리뷰에서 태그별 good/poor 집계 (tag_stats는 플랫폼 구분 없어 직접 계산)"""
+    conn = get_connection()
+    cur = conn.cursor()
+    p = _ph()
+    cur.execute(f"SELECT tags, efficiency FROM reviews WHERE platform = {p}", ("codeforces",))
+    rows = _rows_to_dicts(cur, cur.fetchall())
+    if USE_POSTGRES:
+        cur.close()
+    conn.close()
+
+    counts: dict[str, dict] = {}
+    for row in rows:
+        tags = json.loads(row["tags"]) if isinstance(row["tags"], str) else (row["tags"] or [])
+        eff = row.get("efficiency", "poor")
+        for tag in tags:
+            if tag not in counts:
+                counts[tag] = {"tag": tag, "good_count": 0, "poor_count": 0, "total_count": 0}
+            counts[tag]["total_count"] += 1
+            if eff == "good":
+                counts[tag]["good_count"] += 1
+            else:
+                counts[tag]["poor_count"] += 1
+
+    return sorted(counts.values(), key=lambda x: x["total_count"], reverse=True)
+
+
 def get_weak_tags(top_n: int = 5) -> list:
     p = _ph()
     conn = get_connection()
