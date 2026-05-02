@@ -1,5 +1,5 @@
 import db
-import api_client
+import clients as api_client
 import recommender
 from fastapi import APIRouter, Query
 

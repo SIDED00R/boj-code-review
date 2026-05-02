@@ -1,9 +1,12 @@
 import os
+import logging
 import db
-import api_client
+import clients as api_client
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 from routes.models import SetRepoRequest
+
+_logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -38,8 +41,9 @@ def github_oauth_callback(code: str = "", error: str = ""):
         user = api_client.get_github_user(token)
         username = user.get("login", "")
         db.save_github_settings(access_token=token, github_username=username)
-    except Exception as e:
-        return RedirectResponse(f"{app_url}/?github=error&msg={str(e)[:80]}")
+    except Exception:
+        _logger.exception("GitHub OAuth callback failed")
+        return RedirectResponse(f"{app_url}/?github=error")
     return RedirectResponse(f"{app_url}/?github=connected&user={username}")
 
 

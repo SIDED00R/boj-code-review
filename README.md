@@ -2,6 +2,8 @@
 
 알고리즘 풀이 코드를 AI로 분석하고, 학습 기록을 바탕으로 약한 태그를 추적하는 웹앱입니다.
 
+**라이브 데모**: https://boj-review-707325519995.asia-northeast3.run.app/
+
 현재 지원 범위:
 - `BOJ`: 코드 리뷰, 문제 추천, 통계, 제출 기록 import
 - `Codeforces`: 코드 리뷰, 문제 추천, 통계, 제출 기록 import, 자동 제출
@@ -60,6 +62,11 @@ pip install -r requirements.txt
 ```env
 OPENAI_API_KEY=your_openai_key
 
+# 선택: GitHub OAuth (리뷰 → GitHub push 기능)
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+APP_URL=http://localhost:8000
+
 # 선택: Codeforces 소스 코드 import
 CODEFORCES_API_KEY=your_codeforces_key
 CODEFORCES_API_SECRET=your_codeforces_secret
@@ -67,6 +74,9 @@ CODEFORCES_API_SECRET=your_codeforces_secret
 # 선택: CF 자동 제출
 CODEFORCES_HANDLE=your_cf_handle_or_email
 CODEFORCES_PASSWORD=your_cf_password
+
+# 선택: CORS 허용 출처 (기본값: http://localhost:8080)
+# CORS_ORIGINS=http://localhost:8000,https://yourdomain.com
 
 # 선택: PostgreSQL 사용 시
 # DB_TYPE=postgres
@@ -132,67 +142,95 @@ CODEFORCES_API_SECRET=...
 
 ```
 .
-├── server.py                  # FastAPI 앱 진입점 (라우터 등록만)
-├── db.py                      # DB 초기화 / 쿼리
-├── api_client.py              # 외부 API 클라이언트 (BOJ, CF, OpenAI)
-├── recommender.py             # 문제 추천 로직
-├── cf_submitter.py            # CF 자동 제출 (requests 기반)
-├── routes/
-│   ├── auth.py                # GitHub OAuth
-│   ├── review.py              # 코드 리뷰 & GitHub push
-│   ├── problem.py             # CF 문제 조회 & 번역
-│   ├── execute.py             # 코드 실행 (Python / C++)
-│   ├── recommend.py           # 문제 추천
-│   ├── history.py             # 리뷰 기록 조회
-│   ├── solved.py              # import된 제출 기록 관리
-│   ├── import_routes.py       # GitHub / BOJ / CF import
-│   ├── stats.py               # 통계 & 종합 리포트
-│   └── cf_submit.py           # CF 제출 API
+├── server.py               # FastAPI 앱 초기화, 미들웨어·라우터 등록
+├── main.py                 # CLI 인터페이스 (코드 리뷰, 추천, 통계)
+├── analyzer.py             # OpenAI GPT 코드 분석
+├── recommender.py          # 취약 태그 기반 문제 추천 알고리즘
+├── cf_submitter.py         # Codeforces 자동 제출 (Selenium 기반)
+├── ARCHITECTURE.md         # 레이어 다이어그램 & 호출관계 문서
+│
+├── clients/                # 외부 API 클라이언트 (각 파일이 하나의 플랫폼 담당)
+│   ├── solved_ac.py        # solved.ac API, BOJ 스크래핑, TIER_NAMES 상수
+│   ├── codeforces.py       # Codeforces API, 문제 스크래핑, 한국어 번역
+│   ├── github.py           # GitHub OAuth, 파일 push, BaekjoonHub import
+│   └── utils.py            # get_problem_url(), 파일 확장자 매핑
+│
+├── db/                     # DB 레이어 (각 파일이 하나의 테이블 담당)
+│   ├── connection.py       # DB 연결 팩토리 (SQLite / PostgreSQL)
+│   ├── schema.py           # 테이블 생성 및 마이그레이션
+│   ├── reviews.py          # reviews 테이블 CRUD + 티어/태그 집계
+│   ├── solved.py           # solved_history 테이블 CRUD
+│   └── github_settings.py  # github_settings 테이블 CRUD
+│
+├── routes/                 # FastAPI 라우터 (각 파일이 하나의 도메인 담당)
+│   ├── auth.py             # GitHub OAuth 인증 흐름
+│   ├── review.py           # POST /api/review — AI 코드 리뷰
+│   ├── github_push.py      # POST /api/push-review — GitHub push
+│   ├── problem.py          # GET /api/problem/cf/{ref} — CF 문제 조회
+│   ├── execute.py          # POST /api/execute — Python/C++ 코드 실행
+│   ├── recommend.py        # GET /api/recommend — 문제 추천
+│   ├── history.py          # GET /api/reviews/* — 리뷰 기록 조회
+│   ├── solved.py           # /api/solved-history/* — import 기록 관리
+│   ├── stats.py            # GET /api/stats, /api/tier-history — 통계
+│   ├── report.py           # GET /api/report — 종합 분석 리포트
+│   ├── import_github.py    # POST /api/import-github — BaekjoonHub import
+│   ├── import_boj.py       # POST /api/import — BOJ 제출 기록 import
+│   ├── import_codeforces.py# POST /api/import-codeforces — CF import
+│   ├── cf_submit.py        # /api/cf-submit/* — CF 자동 제출
+│   ├── models.py           # Pydantic 요청/응답 스키마
+│   └── helpers.py          # GitHub용 README 빌더
+│
 └── static/
     ├── index.html
     ├── style.css
-    └── js/
-        ├── utils.js           # 공유 유틸
-        ├── editor.js          # CodeMirror 에디터
-        ├── theme.js           # 다크/라이트 모드
-        ├── tabs.js            # 탭 전환
-        ├── github.js          # GitHub 연결 UI
-        ├── tier-chart.js      # 티어 변화 차트
-        ├── review.js          # 코드 리뷰 탭
-        ├── recommend.js       # 문제 추천 탭
-        ├── problem-modal.js   # CF 문제 뷰어 모달
-        ├── cf-submit.js       # CF 자동 제출
-        ├── stats.js           # 풀이 통계 탭
-        ├── history.js         # 리뷰 기록 탭
-        ├── import.js          # 기록 import 탭
-        └── report.js          # 종합 리포트 탭
+    └── js/                 # 각 파일이 하나의 UI 기능 담당
+        ├── utils.js            # 공통 순수 함수
+        ├── editor.js           # CodeMirror 에디터
+        ├── theme.js            # 다크/라이트 테마
+        ├── tabs.js             # 탭 전환 네비게이션
+        ├── github.js           # GitHub OAuth 연결 UI
+        ├── tier-chart.js       # 티어 변화 Chart.js 그래프
+        ├── review.js           # 코드 리뷰 탭
+        ├── recommend.js        # 문제 추천 탭
+        ├── problem-modal.js    # CF 문제 뷰어 모달
+        ├── cf-submit.js        # CF 자동 제출 UI
+        ├── stats.js            # 태그 통계 시각화
+        ├── history.js          # 리뷰 기록 탭
+        ├── report.js           # 종합 분석 리포트 탭
+        ├── import-history.js   # import 기록 목록, 필터/페이징, AI 리뷰 요청
+        ├── import-github.js    # BaekjoonHub import 버튼 핸들러
+        ├── import-boj.js       # BOJ import 버튼 핸들러
+        └── import-codeforces.js# CF import 버튼 핸들러
 ```
 
-> 각 파일은 단일 기능만 담당합니다 (Single Responsibility Principle).
+> 상세 레이어 다이어그램, 호출관계, 보안 조치 내역은 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참조하세요.
 
 ## 기술 스택
 
-- Backend: FastAPI + Uvicorn
-- Frontend: HTML / CSS / Vanilla JS
-- AI: OpenAI API
-- BOJ 데이터: solved.ac API
-- Codeforces 데이터: Codeforces API + 크롤링
-- CF 제출: requests 라이브러리 (Cloudflare 상태에 따라 동작)
-- DB: SQLite (로컬) / PostgreSQL (배포)
+- **Backend**: FastAPI + Uvicorn
+- **Frontend**: HTML / CSS / Vanilla JS
+- **AI**: OpenAI API (GPT-4o)
+- **BOJ 데이터**: solved.ac API
+- **Codeforces 데이터**: Codeforces API + 크롤링
+- **CF 제출**: Selenium
+- **DB**: SQLite (로컬) / PostgreSQL (배포)
+- **배포**: GCP Cloud Run + Cloud SQL
 
 ## 환경변수 전체 목록
 
 | 변수 | 필수 | 설명 |
 |------|------|------|
-| `OPENAI_API_KEY` | ✅ | AI 리뷰용 OpenAI 키 |
+| `OPENAI_API_KEY` | ✅ | GPT-4o 코드 리뷰 및 번역 |
+| `GITHUB_CLIENT_ID` | 선택 | GitHub OAuth 앱 Client ID |
+| `GITHUB_CLIENT_SECRET` | 선택 | GitHub OAuth 앱 Client Secret |
+| `APP_URL` | 선택 | 서버 공개 URL (OAuth redirect 용) |
 | `CODEFORCES_API_KEY` | 선택 | CF 소스코드 import용 |
 | `CODEFORCES_API_SECRET` | 선택 | CF 소스코드 import용 |
 | `CODEFORCES_HANDLE` | 선택 | CF 자동 제출용 이메일 또는 핸들 |
 | `CODEFORCES_PASSWORD` | 선택 | CF 자동 제출용 비밀번호 |
-| `GITHUB_CLIENT_ID` | 선택 | GitHub OAuth |
-| `GITHUB_CLIENT_SECRET` | 선택 | GitHub OAuth |
-| `APP_URL` | 선택 | GitHub OAuth 콜백 URL |
-| `DB_TYPE` | 선택 | `sqlite`(기본) 또는 `postgres` |
+| `OPENAI_MODEL` | 선택 | 사용할 OpenAI 모델 (기본값: `gpt-4o`) |
+| `CORS_ORIGINS` | 선택 | 허용 CORS 출처 (기본값: `http://localhost:8080`) |
+| `DB_TYPE` | 선택 | `postgres` 설정 시 PostgreSQL 사용 (기본: SQLite) |
 | `DB_NAME` | 선택 | PostgreSQL DB 이름 |
 | `DB_USER` | 선택 | PostgreSQL 사용자 |
 | `DB_PASSWORD` | 선택 | PostgreSQL 비밀번호 |

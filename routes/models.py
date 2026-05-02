@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 
 class ReviewRequest(BaseModel):
@@ -52,6 +52,22 @@ class ExecuteRequest(BaseModel):
     language: str = "python3"
     stdin: str = ""
     timeout_sec: int = 5
+
+    @validator("code")
+    def code_max_length(cls, v):
+        if len(v) > 50_000:
+            raise ValueError("코드는 50,000자를 초과할 수 없습니다.")
+        return v
+
+    @validator("stdin")
+    def stdin_max_length(cls, v):
+        if len(v) > 10_000:
+            raise ValueError("입력은 10,000자를 초과할 수 없습니다.")
+        return v
+
+    @validator("timeout_sec")
+    def timeout_bounds(cls, v):
+        return max(1, min(v, 10))
 
 
 class ReviewResponse(BaseModel):

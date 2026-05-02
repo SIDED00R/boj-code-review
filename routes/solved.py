@@ -1,6 +1,6 @@
 import os
 import db
-import api_client
+import clients as api_client
 import analyzer
 from fastapi import APIRouter, HTTPException
 from routes.models import ReviewResponse

@@ -1,18 +1,33 @@
 """
 FastAPI 웹 서버 — 앱 초기화 및 라우터 등록만 담당
 """
+import os
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import db
-from routes import auth, review, problem, execute, recommend, history, solved, import_routes, stats, cf_submit
+from routes import (
+    auth, review, github_push, problem, execute, recommend,
+    history, solved, import_github, import_boj, import_codeforces,
+    stats, report, cf_submit,
+)
 
 app = FastAPI(title="알고리즘 코드 리뷰 & 문제 추천")
+
+allowed_origins = os.environ.get("CORS_ORIGINS", "http://localhost:8080").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
@@ -22,13 +37,17 @@ db.init_db()
 
 app.include_router(auth.router)
 app.include_router(review.router)
+app.include_router(github_push.router)
 app.include_router(problem.router)
 app.include_router(execute.router)
 app.include_router(recommend.router)
 app.include_router(history.router)
 app.include_router(solved.router)
-app.include_router(import_routes.router)
+app.include_router(import_github.router)
+app.include_router(import_boj.router)
+app.include_router(import_codeforces.router)
 app.include_router(stats.router)
+app.include_router(report.router)
 app.include_router(cf_submit.router)
 
 

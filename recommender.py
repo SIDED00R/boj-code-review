@@ -3,7 +3,7 @@
 점수 = 적게 풀수록(0.5) + AI poor 비율(0.3) + 오래 전에 풀수록(0.2)
 """
 from datetime import datetime
-from api_client import search_problems_by_tag, search_cf_problems_by_tag, get_tag_key_by_name, TIER_NAMES
+from clients import search_problems_by_tag, search_cf_problems_by_tag, get_tag_key_by_name, TIER_NAMES
 import db
 
 # 현재 수준: avg-1 ~ avg+2 / 도전 수준: avg+3 ~ avg+8

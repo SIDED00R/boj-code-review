@@ -57,16 +57,31 @@ async function openProblemModal(ref, title, tierName) {
     ];
     const sectionsHtml = sectionDefs
       .filter(({ key }) => sections[key])
-      .map(({ key, label }) => `
+      .map(({ key, label }) => {
+        const escaped = sections[key]
+          .split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/)
+          .map((part, i) => i % 2 === 1 ? part : escapeHtml(part).replace(/\n/g, '<br>'))
+          .join('');
+        return `
         <div class="pm-section-card">
           <h3>${label}</h3>
-          <div class="pm-text">${escapeHtml(sections[key]).replace(/\n/g, '<br>')}</div>
-        </div>`)
+          <div class="pm-text">${escaped}</div>
+        </div>`;
+      })
       .join('');
 
     const stmtEl = document.getElementById('pm-statement');
     stmtEl.innerHTML = sectionsHtml + samplesHtml;
     stmtEl.classList.remove('hidden');
+    if (typeof renderMathInElement !== 'undefined') {
+      renderMathInElement(stmtEl, {
+        delimiters: [
+          { left: '$$', right: '$$', display: true },
+          { left: '$', right: '$', display: false },
+        ],
+        throwOnError: false,
+      });
+    }
   } catch (e) {
     document.getElementById('pm-loading').innerHTML =
       `<div class="alert alert-error">${escapeHtml(e.message)}</div>`;

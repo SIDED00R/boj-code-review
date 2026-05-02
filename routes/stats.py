@@ -1,8 +1,6 @@
-import os
 import db
-import api_client
-import analyzer
-from fastapi import APIRouter, HTTPException
+import clients as api_client
+from fastapi import APIRouter
 from typing import Optional
 
 router = APIRouter()
@@ -40,22 +38,3 @@ def get_stats(platform: Optional[str] = "boj"):
         "tag_stats": tag_stats,
         "history": [r for r in history if r.get("platform", "boj") == "boj"],
     }
-
-
-@router.get("/api/report")
-def get_report():
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
-
-    tag_stats = db.get_tag_stats()
-    history = db.get_review_history(10)
-
-    if not tag_stats:
-        raise HTTPException(status_code=400, detail="아직 저장된 기록이 없습니다.")
-
-    try:
-        report = analyzer.get_cumulative_analysis(tag_stats, history)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"리포트 생성 실패: {e}")
-
-    return {"report": report}

@@ -1,0 +1,276 @@
+import re
+import os
+import time
+import random
+import hashlib
+from functools import lru_cache
+from urllib.parse import urlencode
+import requests
+from bs4 import BeautifulSoup
+
+CODEFORCES_API_BASE = "https://codeforces.com/api"
+CODEFORCES_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def normalize_codeforces_problem_ref(problem_ref: str) -> tuple[int, str]:
+    """
+    허용 형식: 4A / 4/A / 4-A / 4 A
+    """
+    match = re.match(r"^\s*(\d+)\s*[-/_ ]?\s*([A-Za-z][A-Za-z0-9]*)\s*$", problem_ref or "")
+    if not match:
+        raise ValueError("Codeforces 문제는 '4A' 또는 '4/A' 형식으로 입력해주세요.")
+    contest_id = int(match.group(1))
+    index = match.group(2).upper()
+    return contest_id, index
+
+
+def get_codeforces_problem_info(problem_ref: str) -> dict:
+    from clients.utils import get_problem_url
+    contest_id, index = normalize_codeforces_problem_ref(problem_ref)
+    problem = _get_codeforces_problem_lookup().get((contest_id, index))
+    if not problem:
+        raise ValueError(f"Codeforces 문제를 찾을 수 없습니다: {contest_id}{index}")
+
+    rating = problem.get("rating")
+    rating_label = f"Codeforces {rating}" if rating else "Codeforces Unrated"
+    return {
+        "id": 0,
+        "platform": "codeforces",
+        "problem_ref": f"{contest_id}{index}",
+        "contest_id": contest_id,
+        "index": index,
+        "title": problem.get("name", f"Problem {contest_id}{index}"),
+        "tier": 0,
+        "tier_name": rating_label,
+        "tags": problem.get("tags", []),
+        "url": get_problem_url("codeforces", f"{contest_id}{index}"),
+    }
+
+
+def get_codeforces_problem_statement(problem_ref: str) -> str:
+    contest_id, index = normalize_codeforces_problem_ref(problem_ref)
+    urls = [
+        f"https://codeforces.com/problemset/problem/{contest_id}/{index}",
+        f"https://codeforces.com/contest/{contest_id}/problem/{index}",
+    ]
+
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=CODEFORCES_HEADERS, timeout=15)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            statement = soup.select_one(".problem-statement")
+            if statement:
+                return statement.get_text(separator="\n", strip=True)
+        except Exception:
+            continue
+
+    return "문제 설명 자동 수집에 실패했습니다. 제목, 난이도, 태그 기준으로 제한적으로 분석합니다."
+
+
+def get_cf_problem_sections(problem_ref: str, translate: bool = False) -> dict:
+    """Codeforces 문제 섹션 XPath 추출. translate=True 시 한국어 번역."""
+    try:
+        from lxml import etree
+
+        contest_id, index = normalize_codeforces_problem_ref(problem_ref)
+        url = f"https://codeforces.com/problemset/problem/{contest_id}/{index}"
+        resp = requests.get(url, headers=CODEFORCES_HEADERS, timeout=15)
+        resp.raise_for_status()
+
+        tree = etree.fromstring(resp.text.encode(), etree.HTMLParser())
+        BASE = '//*[@id="pageContent"]/div[3]/div[2]/div'
+
+        def _xtext(expr: str) -> str:
+            nodes = tree.xpath(expr)
+            if not nodes:
+                return ""
+            el = nodes[0]
+            for st in el.xpath('.//*[contains(@class,"section-title")]'):
+                p = st.getparent()
+                if p is not None:
+                    p.remove(st)
+            return " ".join(el.itertext()).strip()
+
+        raw = {
+            "description": _xtext(f'{BASE}/div[2]'),
+            "input":       _xtext(f'{BASE}/div[3]'),
+            "output":      _xtext(f'{BASE}/div[4]'),
+        }
+
+        if not translate:
+            return raw
+
+        from openai import OpenAI as _OAI
+
+        title_nodes = tree.xpath('//div[contains(@class,"title")]')
+        title = " ".join(title_nodes[0].itertext()).strip() if title_nodes else problem_ref
+
+        def _translate(text: str) -> str:
+            if not text:
+                return ""
+            try:
+                client = _OAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+                res = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": (
+                            "You are a competitive programming translator. "
+                            "Translate the given text to natural Korean. "
+                            "Keep all mathematical formulas, variable names, numbers, and constraints exactly as written. "
+                            "Do NOT add any section headers or labels. "
+                            "Return the translated text only."
+                        )},
+                        {"role": "user", "content": f"Problem: {title}\n\nTranslate:\n\n{text}"},
+                    ],
+                    max_tokens=2000,
+                    temperature=0.3,
+                )
+                result = res.choices[0].message.content.strip()
+                return result if result else text
+            except Exception:
+                return text
+
+        return {
+            "description": _translate(raw["description"]),
+            "input":       _translate(raw["input"]),
+            "output":      _translate(raw["output"]),
+        }
+    except Exception:
+        return {"description": "", "input": "", "output": ""}
+
+
+def _codeforces_api_request(method_name: str, params: dict | None = None,
+                            api_key: str | None = None, api_secret: str | None = None) -> dict:
+    params = {k: v for k, v in (params or {}).items() if v is not None}
+    params["lang"] = "en"
+
+    if api_key and api_secret:
+        now = int(time.time())
+        rand = f"{random.randint(0, 999999):06d}"
+        signed_params = {**params, "apiKey": api_key, "time": now}
+        sorted_items = sorted((str(k), str(v)) for k, v in signed_params.items())
+        query = urlencode(sorted_items)
+        sig_base = f"{rand}/{method_name}?{query}#{api_secret}"
+        api_sig = rand + hashlib.sha512(sig_base.encode("utf-8")).hexdigest()
+        signed_params["apiSig"] = api_sig
+        params = signed_params
+
+    resp = requests.get(
+        f"{CODEFORCES_API_BASE}/{method_name}",
+        params=params,
+        headers=CODEFORCES_HEADERS,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("status") != "OK":
+        raise ValueError(payload.get("comment", "Codeforces API 오류"))
+    return payload["result"]
+
+
+@lru_cache(maxsize=1)
+def _get_codeforces_problem_lookup() -> dict[tuple[int, str], dict]:
+    lookup = {}
+    result = _codeforces_api_request("problemset.problems")
+    for problem in result.get("problems", []):
+        contest_id = problem.get("contestId")
+        index = str(problem.get("index", "")).upper()
+        if contest_id and index:
+            lookup[(contest_id, index)] = problem
+    return lookup
+
+
+def get_codeforces_user_info(handle: str) -> dict:
+    users = _codeforces_api_request("user.info", {"handles": handle})
+    if not users:
+        raise ValueError("Codeforces 유저를 찾을 수 없습니다.")
+    return users[0]
+
+
+def get_codeforces_user_submissions(handle: str, count: int = 1000,
+                                    api_key: str | None = None,
+                                    api_secret: str | None = None) -> list[dict]:
+    from clients.utils import get_problem_url
+    result = _codeforces_api_request(
+        "user.status",
+        {"handle": handle, "from": 1, "count": count, "includeSources": "true" if api_key and api_secret else None},
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+    submissions = []
+    seen = set()
+    for sub in result:
+        if sub.get("verdict") != "OK":
+            continue
+        problem = sub.get("problem") or {}
+        contest_id = problem.get("contestId")
+        index = str(problem.get("index", "")).upper()
+        if not contest_id or not index:
+            continue
+        problem_ref = f"{contest_id}{index}"
+        if problem_ref in seen:
+            continue
+        seen.add(problem_ref)
+        submissions.append({
+            "problem_id": 0,
+            "problem_ref": problem_ref,
+            "contest_id": contest_id,
+            "index": index,
+            "title": problem.get("name", problem_ref),
+            "tier": 0,
+            "tier_name": f"Codeforces {problem['rating']}" if problem.get("rating") else "Codeforces Unrated",
+            "tags": problem.get("tags", []),
+            "language": sub.get("programmingLanguage", ""),
+            "code": sub.get("source", "") or "",
+            "submission_id": sub.get("id"),
+            "problem_url": get_problem_url("codeforces", problem_ref),
+        })
+    return submissions
+
+
+def search_cf_problems_by_tag(tag: str, min_rating: int, max_rating: int,
+                               exclude_refs: set) -> list[dict]:
+    url = "https://codeforces.com/api/problemset.problems"
+    try:
+        resp = requests.get(url, params={"tags": tag}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "OK":
+            return []
+        problems = data["result"]["problems"]
+        stats_map = {
+            (s["contestId"], s["index"]): s["solvedCount"]
+            for s in data["result"].get("problemStatistics", [])
+        }
+    except Exception:
+        return []
+
+    results = []
+    for p in problems:
+        rating = p.get("rating", 0)
+        if not rating or not (min_rating <= rating <= max_rating):
+            continue
+        contest_id = p.get("contestId")
+        index = p.get("index", "")
+        if not contest_id:
+            continue
+        ref = f"{contest_id}{index}"
+        if ref in exclude_refs:
+            continue
+        results.append({
+            "id": ref,
+            "title": p.get("name", ref),
+            "tier": 0,
+            "tier_name": f"CF {rating}",
+            "url": f"https://codeforces.com/problemset/problem/{contest_id}/{index}",
+            "_solved_count": stats_map.get((contest_id, index), 0),
+        })
+
+    results.sort(key=lambda x: -x["_solved_count"])
+    for r in results:
+        del r["_solved_count"]
+    return results

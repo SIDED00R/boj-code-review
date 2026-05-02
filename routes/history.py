@@ -1,5 +1,4 @@
 import db
-import api_client
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter()
