@@ -3,12 +3,16 @@ import clients as api_client
 from fastapi import APIRouter, HTTPException
 from routes.models import PushReviewRequest
 from routes.helpers import build_readme
+from demo_mode import IS_DEMO
 
 router = APIRouter()
 
 
 @router.post("/api/push-review")
 def push_review_to_github(req: PushReviewRequest):
+    if IS_DEMO:
+        return {"pushed": True, "repo": "demo_user/algorithm-solutions",
+                "path": f"demo/{req.problem_ref}"}
     gh_settings = db.get_github_settings()
     if not gh_settings:
         raise HTTPException(status_code=400, detail="GitHub 연결이 필요합니다. 헤더의 '🐙 GitHub 연결' 버튼을 눌러주세요.")

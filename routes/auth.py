@@ -5,6 +5,7 @@ import clients as api_client
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 from routes.models import SetRepoRequest
+from demo_mode import IS_DEMO, DEMO_GITHUB_STATUS, DEMO_REPOS
 
 _logger = logging.getLogger(__name__)
 
@@ -20,6 +21,9 @@ def _github_oauth_settings():
 
 @router.get("/auth/github")
 def github_oauth_start():
+    if IS_DEMO:
+        app_url = os.environ.get("APP_URL", "http://localhost:8080")
+        return RedirectResponse(f"{app_url}/?github=connected&user=demo_user")
     client_id, _, app_url = _github_oauth_settings()
     if not client_id:
         raise HTTPException(status_code=500, detail="GITHUB_CLIENT_ID가 설정되지 않았습니다.")
@@ -49,6 +53,8 @@ def github_oauth_callback(code: str = "", error: str = ""):
 
 @router.get("/auth/github/status")
 def github_status():
+    if IS_DEMO:
+        return DEMO_GITHUB_STATUS
     settings = db.get_github_settings()
     if not settings:
         return {"connected": False}
@@ -78,6 +84,8 @@ def github_disconnect():
 
 @router.get("/auth/github/repos")
 def get_github_repos():
+    if IS_DEMO:
+        return {"repos": DEMO_REPOS}
     settings = db.get_github_settings()
     if not settings:
         raise HTTPException(status_code=400, detail="GitHub 연결이 필요합니다.")

@@ -2,12 +2,15 @@ import db
 import clients as api_client
 import recommender
 from fastapi import APIRouter, Query
+from demo_mode import IS_DEMO, DEMO_RECOMMENDATIONS
 
 router = APIRouter()
 
 
 @router.get("/api/recommend")
 def get_recommendations(platform: str = Query("codeforces")):
+    if IS_DEMO:
+        return {**DEMO_RECOMMENDATIONS, "platform": platform}
     if platform == "codeforces":
         avg_rating = db.get_average_cf_rating()
         avg_tier = 0

@@ -2,12 +2,15 @@ import db
 import clients as api_client
 from fastapi import APIRouter, HTTPException
 from routes.models import GithubImportRequest
+from demo_mode import IS_DEMO, demo_block
 
 router = APIRouter()
 
 
 @router.post("/api/import-github")
 def import_from_github(req: GithubImportRequest):
+    if IS_DEMO:
+        demo_block("GitHub 가져오기는 데모 버전에서 지원되지 않습니다.")
     repo = req.repo.strip()
     if not repo or "/" not in repo:
         raise HTTPException(status_code=400, detail="저장소 주소를 owner/repo 형식으로 입력하세요.")

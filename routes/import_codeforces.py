@@ -5,12 +5,15 @@ import clients as api_client
 from fastapi import APIRouter, HTTPException
 from routes.models import CodeforcesImportRequest
 from routes.helpers import build_readme
+from demo_mode import IS_DEMO, demo_block
 
 router = APIRouter()
 
 
 @router.post("/api/import-codeforces")
 def import_codeforces_history(req: CodeforcesImportRequest):
+    if IS_DEMO:
+        demo_block("Codeforces 가져오기는 데모 버전에서 지원되지 않습니다.")
     handle = req.handle.strip()
     if not handle:
         raise HTTPException(status_code=400, detail="Codeforces handle을 입력하세요.")

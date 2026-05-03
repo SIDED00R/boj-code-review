@@ -3,12 +3,15 @@ import clients as api_client
 from fastapi import APIRouter, HTTPException
 from routes.models import ImportRequest
 from routes.helpers import build_readme
+from demo_mode import IS_DEMO, demo_block
 
 router = APIRouter()
 
 
 @router.post("/api/import")
 def import_history(req: ImportRequest):
+    if IS_DEMO:
+        demo_block("BOJ 가져오기는 데모 버전에서 지원되지 않습니다.")
     if not req.boj_id.strip():
         raise HTTPException(status_code=400, detail="BOJ 아이디를 입력하세요.")
 

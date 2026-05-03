@@ -2,6 +2,7 @@ import os
 import asyncio
 import re
 from fastapi import APIRouter, HTTPException
+from demo_mode import IS_DEMO, DEMO_CF_PROBLEM
 
 router = APIRouter()
 
@@ -62,6 +63,9 @@ def _translate_cf_text(text: str, title: str, section_name: str) -> str:
 
 @router.get("/api/problem/cf/{problem_ref}")
 async def get_cf_problem(problem_ref: str):
+    if IS_DEMO:
+        return DEMO_CF_PROBLEM
+
     import requests as _req
     from lxml import etree
 

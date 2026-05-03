@@ -4,6 +4,7 @@ import clients as api_client
 import analyzer
 from fastapi import APIRouter, HTTPException
 from routes.models import ReviewRequest, ReviewResponse
+from demo_mode import IS_DEMO, DEMO_PROBLEM_INFO, DEMO_REVIEW_RESULT
 
 router = APIRouter()
 
@@ -51,6 +52,32 @@ def _resolve_problem(platform: str, problem_id: int | None, problem_ref: str | N
 
 @router.post("/api/review", response_model=ReviewResponse)
 def review_code(req: ReviewRequest):
+    if IS_DEMO:
+        info = DEMO_PROBLEM_INFO
+        result = DEMO_REVIEW_RESULT
+        db.save_review(
+            problem_id=info["id"], title=info["title"], tier=info["tier"],
+            tier_name=info["tier_name"], tags=info["tags"], code=req.code,
+            feedback=result["feedback"], efficiency=result["efficiency"],
+            complexity=result.get("complexity", ""),
+            better_algorithm=result.get("better_algorithm", ""),
+            strengths=result.get("strengths", []),
+            weaknesses=result.get("weaknesses", []),
+            platform=info["platform"], problem_ref=info["problem_ref"],
+        )
+        return ReviewResponse(
+            problem_id=info["id"], platform=info["platform"],
+            problem_ref=info["problem_ref"],
+            problem_url=api_client.get_problem_url(info["platform"], info["problem_ref"]),
+            title=info["title"], tier=info["tier"], tier_name=info["tier_name"],
+            tags=info["tags"], efficiency=result["efficiency"],
+            complexity=result.get("complexity", "N/A"),
+            better_algorithm=result.get("better_algorithm"),
+            feedback=result["feedback"],
+            strengths=result.get("strengths", []),
+            weaknesses=result.get("weaknesses", []),
+        )
+
     if not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
     if not req.code.strip():

@@ -15,7 +15,7 @@ import db
 from routes import (
     auth, review, github_push, problem, execute, recommend,
     history, solved, import_github, import_boj, import_codeforces,
-    stats, report, cf_submit,
+    stats, report,
 )
 
 app = FastAPI(title="알고리즘 코드 리뷰 & 문제 추천")
@@ -33,7 +33,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-db.init_db()
+if os.environ.get("DEMO_MODE", "false").lower() == "true":
+    import demo_seed
+    demo_seed.seed()
+else:
+    db.init_db()
 
 app.include_router(auth.router)
 app.include_router(review.router)
@@ -48,7 +52,6 @@ app.include_router(import_boj.router)
 app.include_router(import_codeforces.router)
 app.include_router(stats.router)
 app.include_router(report.router)
-app.include_router(cf_submit.router)
 
 
 @app.get("/")

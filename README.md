@@ -2,11 +2,13 @@
 
 알고리즘 풀이 코드를 AI로 분석하고, 학습 기록을 바탕으로 약한 태그를 추적하는 웹앱입니다.
 
-**라이브 데모**: https://boj-review-707325519995.asia-northeast3.run.app/
+**라이브 데모**: https://boj-review-demo-707325519995.asia-northeast3.run.app/
+
+> 데모는 실제 API 없이 샘플 데이터로 동작합니다. 모든 기능을 자유롭게 체험해보세요.
 
 현재 지원 범위:
 - `BOJ`: 코드 리뷰, 문제 추천, 통계, 제출 기록 import
-- `Codeforces`: 코드 리뷰, 문제 추천, 통계, 제출 기록 import, 자동 제출
+- `Codeforces`: 코드 리뷰, 문제 추천, 통계, 제출 기록 import, 인앱 문제 뷰어
 
 ## 주요 기능
 
@@ -15,9 +17,6 @@
 - **CF 인앱 문제 뷰어**
   - Codeforces 문제를 앱 내에서 바로 보고 한국어 번역까지 제공합니다.
   - 예제 입출력 직접 실행 (Python / C++) 지원
-- **CF 자동 제출**
-  - 코드를 작성한 뒤 버튼 한 번으로 Codeforces에 직접 제출합니다.
-  - `CODEFORCES_HANDLE` / `CODEFORCES_PASSWORD` 환경변수로 자동 로그인
 - **기록 import**
   - `BaekjoonHub GitHub` 저장소 import
   - `BOJ 제출 기록` import
@@ -71,10 +70,6 @@ APP_URL=http://localhost:8000
 CODEFORCES_API_KEY=your_codeforces_key
 CODEFORCES_API_SECRET=your_codeforces_secret
 
-# 선택: CF 자동 제출
-CODEFORCES_HANDLE=your_cf_handle_or_email
-CODEFORCES_PASSWORD=your_cf_password
-
 # 선택: CORS 허용 출처 (기본값: http://localhost:8080)
 # CORS_ORIGINS=http://localhost:8000,https://yourdomain.com
 
@@ -100,14 +95,19 @@ python -m uvicorn server:app --reload
 
 - CF 문제 본문은 공식 API가 제공하지 않으므로 크롤링으로 가져옵니다.
   - 실패 시 리뷰 화면의 `문제 설명` 입력칸에 직접 붙여 넣어도 됩니다.
-- CF 자동 제출은 Cloudflare 상태에 따라 차단될 수 있습니다.
 - CF 소스코드 import는 본인 계정 API Key / Secret이 필요합니다.
 
 ## 배포
 
-### Cloud Run + Cloud SQL
+### Cloud Run (SQLite)
 
-이 프로젝트는 GCP Cloud Run + Cloud SQL(PostgreSQL) 구성으로 배포할 수 있습니다.
+```bash
+gcloud run deploy boj-review \
+  --source . \
+  --region asia-northeast3
+```
+
+### Cloud Run + Cloud SQL (PostgreSQL)
 
 ```bash
 gcloud run deploy boj-review \
@@ -131,12 +131,26 @@ GITHUB_CLIENT_ID=...
 GITHUB_CLIENT_SECRET=...
 APP_URL=https://your-cloud-run-url
 
-# CF 자동 제출 (선택)
-CODEFORCES_HANDLE=...
-CODEFORCES_PASSWORD=...
+# CF import (선택)
 CODEFORCES_API_KEY=...
 CODEFORCES_API_SECRET=...
 ```
+
+### 데모 서버 배포
+
+실제 API 없이 샘플 데이터로 동작하는 데모 서버를 별도로 배포할 수 있습니다.
+
+```bash
+gcloud run deploy boj-review-demo \
+  --source . \
+  --region asia-northeast3 \
+  --set-env-vars "DEMO_MODE=true"
+```
+
+`DEMO_MODE=true` 설정 시:
+- LLM·GitHub·외부 API 호출 없이 mock 응답 반환
+- 시딩된 샘플 데이터로 통계·히스토리 표시
+- SQLite 사용 (Cloud SQL 불필요)
 
 ## 프로젝트 구조
 
@@ -146,7 +160,8 @@ CODEFORCES_API_SECRET=...
 ├── main.py                 # CLI 인터페이스 (코드 리뷰, 추천, 통계)
 ├── analyzer.py             # OpenAI GPT 코드 분석
 ├── recommender.py          # 취약 태그 기반 문제 추천 알고리즘
-├── cf_submitter.py         # Codeforces 자동 제출 (Selenium 기반)
+├── demo_mode.py            # 데모 모드 플래그 및 mock 데이터
+├── demo_seed.py            # 데모용 SQLite 샘플 데이터 시딩
 ├── ARCHITECTURE.md         # 레이어 다이어그램 & 호출관계 문서
 │
 ├── clients/                # 외부 API 클라이언트 (각 파일이 하나의 플랫폼 담당)
@@ -176,7 +191,6 @@ CODEFORCES_API_SECRET=...
 │   ├── import_github.py    # POST /api/import-github — BaekjoonHub import
 │   ├── import_boj.py       # POST /api/import — BOJ 제출 기록 import
 │   ├── import_codeforces.py# POST /api/import-codeforces — CF import
-│   ├── cf_submit.py        # /api/cf-submit/* — CF 자동 제출
 │   ├── models.py           # Pydantic 요청/응답 스키마
 │   └── helpers.py          # GitHub용 README 빌더
 │
@@ -193,7 +207,6 @@ CODEFORCES_API_SECRET=...
         ├── review.js           # 코드 리뷰 탭
         ├── recommend.js        # 문제 추천 탭
         ├── problem-modal.js    # CF 문제 뷰어 모달
-        ├── cf-submit.js        # CF 자동 제출 UI
         ├── stats.js            # 태그 통계 시각화
         ├── history.js          # 리뷰 기록 탭
         ├── report.js           # 종합 분석 리포트 탭
@@ -212,9 +225,8 @@ CODEFORCES_API_SECRET=...
 - **AI**: OpenAI API (GPT-4o)
 - **BOJ 데이터**: solved.ac API
 - **Codeforces 데이터**: Codeforces API + 크롤링
-- **CF 제출**: Selenium
-- **DB**: SQLite (로컬) / PostgreSQL (배포)
-- **배포**: GCP Cloud Run + Cloud SQL
+- **DB**: SQLite (로컬 / 데모) / PostgreSQL (배포)
+- **배포**: GCP Cloud Run
 
 ## 환경변수 전체 목록
 
@@ -226,10 +238,9 @@ CODEFORCES_API_SECRET=...
 | `APP_URL` | 선택 | 서버 공개 URL (OAuth redirect 용) |
 | `CODEFORCES_API_KEY` | 선택 | CF 소스코드 import용 |
 | `CODEFORCES_API_SECRET` | 선택 | CF 소스코드 import용 |
-| `CODEFORCES_HANDLE` | 선택 | CF 자동 제출용 이메일 또는 핸들 |
-| `CODEFORCES_PASSWORD` | 선택 | CF 자동 제출용 비밀번호 |
 | `OPENAI_MODEL` | 선택 | 사용할 OpenAI 모델 (기본값: `gpt-4o`) |
 | `CORS_ORIGINS` | 선택 | 허용 CORS 출처 (기본값: `http://localhost:8080`) |
+| `DEMO_MODE` | 선택 | `true` 설정 시 mock 데이터로 동작 (API 키 불필요) |
 | `DB_TYPE` | 선택 | `postgres` 설정 시 PostgreSQL 사용 (기본: SQLite) |
 | `DB_NAME` | 선택 | PostgreSQL DB 이름 |
 | `DB_USER` | 선택 | PostgreSQL 사용자 |
