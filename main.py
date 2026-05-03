@@ -29,7 +29,7 @@ console = Console()
 def check_api_key():
     if not os.environ.get("OPENAI_API_KEY"):
         console.print("[bold red]오류:[/] OPENAI_API_KEY가 설정되지 않았습니다.")
-        console.print("  .env 파일에 OPENAI_API_KEY=sk-ant-... 를 추가하세요.")
+        console.print("  .env 파일에 OPENAI_API_KEY=sk-proj-... 를 추가하세요.")
         sys.exit(1)
 
 
@@ -125,8 +125,7 @@ def action_review():
     with console.status("[cyan]문제 설명 크롤링 중...[/]"):
         statement = api_client.get_problem_statement(problem_id)
 
-    # Claude 코드 분석
-    with console.status("[cyan]Claude가 코드를 분석 중입니다...[/]"):
+    with console.status("[cyan]AI가 코드를 분석 중입니다...[/]"):
         try:
             result = analyzer.analyze_code(problem_info, statement, code)
         except Exception as e:
@@ -308,7 +307,7 @@ def main():
     db.init_db()
 
     console.print("[bold magenta]백준 코드 리뷰 & 문제 추천 시스템[/]")
-    console.print("[dim]Claude API + solved.ac 기반[/]\n")
+    console.print("[dim]OpenAI API + solved.ac 기반[/]\n")
 
     while True:
         print_menu()

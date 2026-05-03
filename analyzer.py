@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GPT_MODEL = "gpt-4o"
+GPT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
+_MAX_TOKENS_REVIEW = int(os.environ.get("OPENAI_MAX_TOKENS", "2048"))
+_MAX_TOKENS_REPORT = int(os.environ.get("OPENAI_REPORT_MAX_TOKENS", "1024"))
 
 
 def analyze_code(problem_info: dict, problem_statement: str, code: str) -> dict:
@@ -80,7 +82,7 @@ efficiency 기준:
             {"role": "user", "content": user_prompt},
         ],
         response_format={"type": "json_object"},
-        max_tokens=2048,
+        max_tokens=_MAX_TOKENS_REVIEW,
     )
 
     raw = response.choices[0].message.content.strip()
@@ -130,7 +132,7 @@ def get_cumulative_analysis(tag_stats: list[dict], review_history: list[dict]) -
     response = client.chat.completions.create(
         model=GPT_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=1024,
+        max_tokens=_MAX_TOKENS_REPORT,
     )
 
     return response.choices[0].message.content.strip()

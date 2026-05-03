@@ -10,6 +10,7 @@ router = APIRouter()
 # 코드 실행 subprocess에 전달할 안전한 환경변수만 허용 (API 키 등 민감 정보 차단)
 _SAFE_ENV_KEYS = {"PATH", "HOME", "TEMP", "TMP", "TMPDIR", "SYSTEMROOT", "SYSTEMDRIVE", "LANG", "LC_ALL"}
 _BASE_ENV = {k: v for k, v in os.environ.items() if k in _SAFE_ENV_KEYS}
+_COMPILE_TIMEOUT = int(os.environ.get("COMPILE_TIMEOUT", "30"))
 
 
 def _run_python(code: str, stdin: str, timeout: int) -> dict:
@@ -36,7 +37,7 @@ def _run_cpp(code: str, stdin: str, timeout: int) -> dict:
         try:
             cr = subprocess.run(
                 ["g++", "-O2", "-std=c++17", "-o", exe, src],
-                capture_output=True, text=True, timeout=30, env=_BASE_ENV,
+                capture_output=True, text=True, timeout=_COMPILE_TIMEOUT, env=_BASE_ENV,
             )
         except FileNotFoundError:
             return {"stdout": "", "stderr": "[g++를 찾을 수 없습니다]", "exit_code": -1}

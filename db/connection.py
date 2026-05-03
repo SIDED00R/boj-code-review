@@ -27,7 +27,8 @@ def get_connection():
         )
     else:
         import sqlite3
-        db_path = Path(__file__).parent.parent / "coding_recommend.db"
+        _db_env = os.environ.get("DB_PATH")
+        db_path = Path(_db_env) if _db_env else Path(__file__).parent.parent / "coding_recommend.db"
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn

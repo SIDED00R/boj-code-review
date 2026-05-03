@@ -4,6 +4,10 @@ import re
 from fastapi import APIRouter, HTTPException
 from demo_mode import IS_DEMO, DEMO_CF_PROBLEM
 
+_MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "2000"))
+_TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.3"))
+_API_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "15"))
+
 router = APIRouter()
 
 
@@ -12,7 +16,7 @@ def _translate_cf_problem(text: str, title: str) -> str:
         from openai import OpenAI as _OpenAI
         client = _OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
             messages=[
                 {"role": "system", "content": (
                     "당신은 프로그래밍 문제 번역 전문가입니다. "
@@ -22,8 +26,8 @@ def _translate_cf_problem(text: str, title: str) -> str:
                 )},
                 {"role": "user", "content": f"제목: {title}\n\n{text}"},
             ],
-            max_tokens=2000,
-            temperature=0.3,
+            max_tokens=_MAX_TOKENS,
+            temperature=_TEMPERATURE,
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
@@ -35,7 +39,7 @@ def _translate_cf_text(text: str, title: str, section_name: str) -> str:
         from openai import OpenAI as _OpenAI
         client = _OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
             messages=[
                 {"role": "system", "content": (
                     "You are a competitive programming translator. "
@@ -51,9 +55,9 @@ def _translate_cf_text(text: str, title: str, section_name: str) -> str:
                 )},
                 {"role": "user", "content": f"Problem: {title}\n\nTranslate this text:\n\n{text}"},
             ],
-            max_tokens=2000,
-            temperature=0.3,
-            timeout=15,
+            max_tokens=_MAX_TOKENS,
+            temperature=_TEMPERATURE,
+            timeout=_API_TIMEOUT,
         )
         result = resp.choices[0].message.content.strip()
         return result if result else text

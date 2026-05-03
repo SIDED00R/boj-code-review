@@ -9,6 +9,10 @@ import requests
 from bs4 import BeautifulSoup
 
 CODEFORCES_API_BASE = "https://codeforces.com/api"
+
+_MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "2000"))
+_TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.3"))
+_API_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT", "15"))
 CODEFORCES_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
@@ -115,7 +119,7 @@ def get_cf_problem_sections(problem_ref: str, translate: bool = False) -> dict:
             try:
                 client = _OAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
                 res = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
                     messages=[
                         {"role": "system", "content": (
                             "You are a competitive programming translator. "
@@ -126,8 +130,8 @@ def get_cf_problem_sections(problem_ref: str, translate: bool = False) -> dict:
                         )},
                         {"role": "user", "content": f"Problem: {title}\n\nTranslate:\n\n{text}"},
                     ],
-                    max_tokens=2000,
-                    temperature=0.3,
+                    max_tokens=_MAX_TOKENS,
+                    temperature=_TEMPERATURE,
                 )
                 result = res.choices[0].message.content.strip()
                 return result if result else text
